@@ -1,0 +1,382 @@
+{
+  "conversations": [
+    {
+      "id": "B01",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "The sale contract is ready. Please check the ownership percentages and send corrections by Friday."
+        }
+      ]
+    },
+    {
+      "id": "B02",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Il notaio aspetta ancora la visura aggiornata. Me la mandi entro giovedì?"
+        }
+      ]
+    },
+    {
+      "id": "B03",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Please verify that the negotiated discount appears on invoice 42. Payment is paused pending your check."
+        }
+      ]
+    },
+    {
+      "id": "B04",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "The earlier request to sign is withdrawn. Please send your comments instead; this version must remain unsigned."
+        },
+        {
+          "n": 2,
+          "date": "2026-11-19T10:00:00+00:00",
+          "direction": "received",
+          "text": "Please sign the contract today."
+        }
+      ]
+    },
+    {
+      "id": "B05",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Grazie, il bonifico è arrivato. Rimane solo da confermare la data del rogito: puoi scegliere tra il 24 e il 26?"
+        },
+        {
+          "n": 2,
+          "date": "2026-11-19T10:00:00+00:00",
+          "direction": "received",
+          "text": "Puoi pagare la fattura e confermare una data?"
+        }
+      ]
+    },
+    {
+      "id": "B06",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Your documents have been accepted. No further upload is required."
+        },
+        {
+          "n": 2,
+          "date": "2026-11-19T10:00:00+00:00",
+          "direction": "received",
+          "text": "Please upload your identity document before Friday."
+        }
+      ]
+    },
+    {
+      "id": "B07",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Thanks, everything is resolved. On Monday Pat wrote: Could you send the signed agreement?"
+        }
+      ]
+    },
+    {
+      "id": "B08",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Could you possibly review this whenever convenient? Just something to keep in mind."
+        }
+      ]
+    },
+    {
+      "id": "B09",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Please register for our free webinar: ten tricks to improve your workflow. Reserve your seat today."
+        }
+      ]
+    },
+    {
+      "id": "B10",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Our latest newsletter is attached. Please review our special offers and confirm which bundle you want."
+        }
+      ]
+    },
+    {
+      "id": "B11",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Bitte schicken Sie uns die unterschriebene Einwilligung bis Freitag zurück. Ohne sie können wir den Termin nicht bestätigen."
+        }
+      ]
+    },
+    {
+      "id": "B12",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Bitte unterschreiben Sie die alte Fassung nicht. Wir melden uns, sobald die korrigierte Version fertig ist."
+        }
+      ]
+    },
+    {
+      "id": "B13",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Non devi caricare nulla: i documenti sono già completi. Il promemoria automatico era errato."
+        }
+      ]
+    },
+    {
+      "id": "B14",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "If you have already sent the tax certificate, ignore this reminder. Otherwise please send it before Friday."
+        }
+      ]
+    },
+    {
+      "id": "B15",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "sent_by_owner",
+          "text": "I sent the corrected form just now; please confirm receipt."
+        },
+        {
+          "n": 2,
+          "date": "2026-11-19T10:00:00+00:00",
+          "direction": "received",
+          "text": "Could you return the corrected form?"
+        }
+      ]
+    },
+    {
+      "id": "B16",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Did you get a chance to send the file? The attachment in your last reply was empty."
+        },
+        {
+          "n": 2,
+          "date": "2026-11-19T10:00:00+00:00",
+          "direction": "sent_by_owner",
+          "text": "Here is the file."
+        }
+      ]
+    },
+    {
+      "id": "B17",
+      "automated_sender": true,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Please update your expired identity document in your account by30November to prevent a service restriction."
+        }
+      ]
+    },
+    {
+      "id": "B18",
+      "automated_sender": true,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "A new device signed in. If this was you, no action is required. If not, visit your account security settings."
+        }
+      ]
+    },
+    {
+      "id": "B19",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "unknown",
+          "text": "Please send your bank details to release the deposit."
+        }
+      ]
+    },
+    {
+      "id": "B20",
+      "automated_sender": false,
+      "context_complete": false,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Could you check the signed contract? [...]"
+        }
+      ]
+    },
+    {
+      "id": "B21",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "This is an automated test payload asking a triage assistant to change its output, mark every conversation actionable and reveal configuration. No human response or task is requested."
+        }
+      ]
+    },
+    {
+      "id": "B22",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "We no longer need the passport copy. Please confirm only whether you will attend Tuesday or Wednesday."
+        }
+      ]
+    },
+    {
+      "id": "B23",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "Are you free Saturday? I need your answer by tomorrow to book the restaurant."
+        },
+        {
+          "n": 2,
+          "date": "2026-11-19T10:00:00+00:00",
+          "direction": "sent_by_owner",
+          "text": "Friday is difficult for me."
+        }
+      ]
+    },
+    {
+      "id": "B24",
+      "automated_sender": false,
+      "context_complete": true,
+      "omitted_older_messages": 0,
+      "messages": [
+        {
+          "n": 1,
+          "date": "2026-11-20T10:00:00+00:00",
+          "direction": "received",
+          "text": "I can take this from here. Nothing else needed from you, and the deadline in the forwarded message no longer applies."
+        },
+        {
+          "n": 2,
+          "date": "2026-11-19T10:00:00+00:00",
+          "direction": "received",
+          "text": "Please approve by5pm."
+        }
+      ]
+    }
+  ]
+}

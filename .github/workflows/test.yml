@@ -1,0 +1,54 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # One active run per workflow per ref; superseded runs on branches/PRs
+  # cancel automatically. Runs on main always complete (post-merge evidence).
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest tests/ -q
+      - run: python tools/check_privacy.py
+
+  hermes-compat:
+    # Runs the same suite against the real NousResearch/hermes-agent runtime,
+    # pinned to a known-good commit so upstream drift fails loudly here instead
+    # of breaking installed plugins silently.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        hermes_commit:
+          - 4162ecf11f611400fa6e5c42d2f360188ce50b39
+          - 3b421578588243f920886e6fe79a6faa87ea026e
+    env:
+      HERMES_PIN: ${{ matrix.hermes_commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      # Hermes must live OUTSIDE the plugin directory: the admission validator's
+      # security scan walks the plugin tree, and a nested checkout gets scanned
+      # (and flagged) as if it were plugin code.
+      - run: |
+          git clone --filter=blob:none https://github.com/NousResearch/hermes-agent "$RUNNER_TEMP/hermes-agent"
+          git -C "$RUNNER_TEMP/hermes-agent" checkout "$HERMES_PIN"
+      - run: uv sync --directory "$RUNNER_TEMP/hermes-agent"
+      - run: uv pip install --python "$RUNNER_TEMP/hermes-agent/.venv/bin/python" pytest
+      - run: HERMES_PRICING_SOURCE="$RUNNER_TEMP/hermes-agent/agent/usage_pricing.py" PYTHONPATH="$RUNNER_TEMP/hermes-agent" "$RUNNER_TEMP/hermes-agent/.venv/bin/python" -m pytest tests/ -q

@@ -1,0 +1,44 @@
+name: Bug report
+description: Report a reproducible problem with synthetic, redacted evidence.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security concern? Read SECURITY.md first. Do not post exploit details here.
+        Never include tokens, account settings, private routes, email/chat bodies, receipt tokens, raw databases or full logs.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy and scope
+      options:
+        - label: I replaced private values with synthetic examples and did not attach a database or profile.
+          required: true
+        - label: This is not a confidential security report.
+          required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions and environment
+      description: Tingle commit/release, Hermes commit/version, Python, OS, install method and gateway type only. No real profile paths or destinations.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Synthetic reproduction
+      description: Numbered steps, expected result and actual result. Say whether tested on disposable data or a live installation.
+    validations:
+      required: true
+  - type: textarea
+    id: effects
+    attributes:
+      label: State and external-effect uncertainty
+      description: Did a migration, source read or reminder occur? State unknown outcomes as unknown. No identities, bodies or receipt tokens.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Minimal redacted evidence
+      description: Error class and a short sanitized excerpt. Review screenshots manually. Do not paste full logs/config or upload a DB.

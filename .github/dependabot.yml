@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # Python dev dependencies (requirements-dev.txt).
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    # Minor/patch updates arrive as one grouped PR per week instead of one PR
+    # per dependency. Major updates stay individual (breaking-change review).
+    # Security updates are separate per-advisory PRs and are not grouped.
+    groups:
+      minor-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+  # Keep SHA-pinned GitHub Actions current (opens PRs that bump the pin + comment).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      minor-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]

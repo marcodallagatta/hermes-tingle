@@ -1,0 +1,57 @@
+name: plugin-admission
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # One active run per workflow per ref; superseded runs on branches/PRs
+  # cancel automatically. Runs on main always complete (post-merge evidence).
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  official-cli:
+    name: official-cli-${{ matrix.hermes_commit }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        hermes_commit:
+          - 4162ecf11f611400fa6e5c42d2f360188ce50b39
+          - 3b421578588243f920886e6fe79a6faa87ea026e
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      - name: Prepare exact Hermes outside the plugin tree
+        env:
+          HERMES_PIN: ${{ matrix.hermes_commit }}
+        run: |
+          git clone --filter=blob:none https://github.com/NousResearch/hermes-agent "$RUNNER_TEMP/hermes-admission"
+          git -C "$RUNNER_TEMP/hermes-admission" checkout --detach "$HERMES_PIN"
+          test "$(git -C "$RUNNER_TEMP/hermes-admission" rev-parse HEAD)" = "$HERMES_PIN"
+          uv sync --directory "$RUNNER_TEMP/hermes-admission"
+      - name: Run official CLI in new synthetic homes
+        run: |
+          python3 tools/run_admission_checks.py \
+            --python "$RUNNER_TEMP/hermes-admission/.venv/bin/python" \
+            --runtime-root "$RUNNER_TEMP/hermes-admission" \
+            --plugin "$GITHUB_WORKSPACE" \
+            --report-dir "$RUNNER_TEMP/admission-reports" \
+            --timeout 600
+      - name: Preserve passed, failed and warning evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: admission-${{ matrix.hermes_commit }}
+          path: ${{ runner.temp }}/admission-reports/
+          if-no-files-found: warn
+          retention-days: 7

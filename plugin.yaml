@@ -1,0 +1,11 @@
+name: hermes-tingle
+version: "0.9.0"
+requires_hermes: ">=0.23.1"
+description: Hermes Tingle commitment tracking and follow-up.
+author: Hermes Tingle contributors
+provides_tools:
+  - hermes_tingle
+provides_hooks:
+  # post_gateway_admission observer (admitted, post-auth lifecycle point):
+  # records source discovery metadata; always returns None.
+  - post_gateway_admission

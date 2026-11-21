@@ -1,0 +1,26 @@
+name: Feature request
+description: Propose an outcome, including permission and privacy boundaries.
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: Use synthetic examples. Do not include personal schedules, messages, contacts or account details.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: User outcome
+      description: What should become possible? What currently fails or takes extra work?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and safety
+      description: Which sources, permissions, costs, external effects and review/approval steps would this require? What must stay out of scope?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance and alternatives
+      description: A synthetic example, success criteria, failure behavior and simpler alternatives.
