@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from due_alerts import render_due_alerts
 import due_alerts
 import pytest
+from runtime_support import hermes_import
 
 
 @pytest.mark.parametrize("zone, expected", [
@@ -241,7 +242,7 @@ def test_reply_watches_beyond_first_page_do_not_starve_a_due_deadline(monkeypatc
 
 
 def test_suggested_source_text_is_literal_in_telegram_conversion():
-    to_markdown_v2 = pytest.importorskip(
+    to_markdown_v2 = hermes_import(
         "plugins.platforms.telegram.telegram_markdown",
         reason="requires the Hermes runtime Telegram converter",
     ).to_markdown_v2
@@ -278,7 +279,7 @@ def test_unverified_or_email_child_is_not_suggested():
 
 
 def test_telegram_markup_and_budget_for_escape_heavy_suggestions():
-    to_markdown_v2 = pytest.importorskip(
+    to_markdown_v2 = hermes_import(
         "plugins.platforms.telegram.telegram_markdown",
         reason="requires the Hermes runtime Telegram converter",
     ).to_markdown_v2
@@ -293,7 +294,7 @@ def test_telegram_markup_and_budget_for_escape_heavy_suggestions():
 
 
 def test_telegram_budget_with_escape_heavy_titles_and_suggestions():
-    to_markdown_v2 = pytest.importorskip(
+    to_markdown_v2 = hermes_import(
         "plugins.platforms.telegram.telegram_markdown",
         reason="requires the Hermes runtime Telegram converter",
     ).to_markdown_v2
@@ -438,7 +439,7 @@ def test_conflicting_title_is_an_item_not_a_claimed_next_action_or_raw_context()
 
 
 def test_untrusted_title_is_literal_in_actual_telegram_markdown_conversion():
-    to_markdown_v2 = pytest.importorskip(
+    to_markdown_v2 = hermes_import(
         "plugins.platforms.telegram.telegram_markdown",
         reason="requires the Hermes runtime Telegram converter",
     ).to_markdown_v2
@@ -477,7 +478,7 @@ def test_blocked_item_with_no_context_requests_details_instead_of_assuming_a_fix
 
 
 def test_telegram_converted_message_stays_within_limit_with_escape_heavy_titles():
-    to_markdown_v2 = pytest.importorskip(
+    to_markdown_v2 = hermes_import(
         "plugins.platforms.telegram.telegram_markdown",
         reason="requires the Hermes runtime Telegram converter",
     ).to_markdown_v2

@@ -188,6 +188,9 @@ def test_epoch_change_between_preview_and_commit_inside_the_lock_adds_nothing(th
     assert store.list_items() == [] and ('changed' in text or 'consent' in text), text
 
 
-def test_remove_command_explains_host_local_removal_without_acting(three):
-    out = plugin.handle_command(three[1], 'remove', source=three[0])
-    assert 'local operator step' in out and 'nothing was removed' in out and 'restart' in out
+def test_remove_command_explains_explicit_manual_profile_cleanup_without_acting(three):
+    out=plugin.handle_command(three[1],'remove',source=three[0])
+    assert 'local operator step' in out and 'nothing was removed' in out
+    assert 'tools/tingle_remove.py -p <profile-name> --plan' in out
+    assert 'hermes -p <profile-name> plugins remove hermes-tingle' in out
+    assert 'Tingle never runs the plugin manager' in out and '`-p default`' in out

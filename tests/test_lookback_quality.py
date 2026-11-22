@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from test_lookback import env, run, snapshot
 from test_lookback_automatic import noise_payload
+from runtime_support import hermes_import
 import hermes_tingle_lookback as lb
 import hermes_tingle_assess as assess
 import hermes_tingle as plugin
@@ -36,8 +37,9 @@ def seed(env, specs):
 def verdict(cid, disposition='not_actionable', quote='', n=1, action='', resolved=False):
     return dict(id=cid, disposition=disposition, action=action, evidence_message=n if quote else 0,
                 evidence_quote=quote, why='synthetic', resolved_later=resolved, uncertainty='synthetic',
-                expiry_span='', expiry_date='', expiry_is_item_own=False,
-                review_plan=dict(actor='unknown',outcome='',basis='unknown',anchor_message=0,after_days=0,timing_quote=''))
+                expiry_span='', expiry_date='', expiry_is_item_own=False,topic_emoji='📌',
+                review_plan=dict(actor='unknown',outcome='',basis='unknown',anchor_message=0,after_days=0,
+                                 timing_quote='',older_context_independent=False))
 
 
 def default_decide(conv):
@@ -423,7 +425,7 @@ def test_conversation_record_bounds_messages_and_marks_shortening():
 
 
 def test_real_host_facade_accepts_our_call_and_results_cross_isolation_both_shapes():
-    plugin_llm = pytest.importorskip('agent.plugin_llm', reason='requires the pinned Hermes runtime')
+    plugin_llm = hermes_import('agent.plugin_llm', reason='requires the pinned Hermes runtime')
     captured = {}
     def caller(**kw):
         captured.update(kw)
@@ -435,7 +437,7 @@ def test_real_host_facade_accepts_our_call_and_results_cross_isolation_both_shap
     parsed = assess.request(ctx, [{'id': 'C1', 'messages': []}])
     assert assess.validate(parsed, _ev())['C1']['supported']
     assert captured['provider_override'] is None and captured['model_override'] is None and captured['profile_override'] is None
-    wire = pytest.importorskip('hermes_cli.plugin_host_wire', reason='requires the pinned Hermes runtime')
+    wire = hermes_import('hermes_cli.plugin_host_wire', reason='requires the pinned Hermes runtime')
     result = llm.complete_structured(instructions='x', input=[{'type': 'text', 'text': '{}'}], json_mode=True)
     crossed = wire.decode(json.loads(json.dumps(wire.encode(result))))  # What a host-isolated plugin receives.
     assert isinstance(crossed, dict) and crossed.parsed == result.parsed

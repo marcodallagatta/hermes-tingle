@@ -51,4 +51,15 @@ jobs:
           git -C "$RUNNER_TEMP/hermes-agent" checkout "$HERMES_PIN"
       - run: uv sync --directory "$RUNNER_TEMP/hermes-agent"
       - run: uv pip install --python "$RUNNER_TEMP/hermes-agent/.venv/bin/python" pytest
-      - run: HERMES_PRICING_SOURCE="$RUNNER_TEMP/hermes-agent/agent/usage_pricing.py" PYTHONPATH="$RUNNER_TEMP/hermes-agent" "$RUNNER_TEMP/hermes-agent/.venv/bin/python" -m pytest tests/ -q
+      # Required imports in runtime-dependent tests must fail, not silently skip.
+      - run: HERMES_REQUIRE_RUNTIME=1 HERMES_PRICING_SOURCE="$RUNNER_TEMP/hermes-agent/agent/usage_pricing.py" PYTHONPATH="$RUNNER_TEMP/hermes-agent" "$RUNNER_TEMP/hermes-agent/.venv/bin/python" -m pytest tests/ -q
+      - name: Run native removal smoke (DELETE and KEEP)
+        env:
+          HOME: ${{ runner.temp }}/tingle-smoke-home
+          HERMES_HOME: ${{ runner.temp }}/tingle-smoke-home
+          TMPDIR: ${{ runner.temp }}/tingle-smoke-tmp
+          PYTHONPATH: ${{ github.workspace }}:${{ runner.temp }}/hermes-agent
+        run: |
+          mkdir -m 700 -p "$HOME" "$TMPDIR"
+          "$RUNNER_TEMP/hermes-agent/.venv/bin/python" tests/native_removal_smoke.py
+          "$RUNNER_TEMP/hermes-agent/.venv/bin/python" tests/native_removal_smoke.py --keep-data

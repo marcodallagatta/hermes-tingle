@@ -6,7 +6,7 @@ Tingle is a public pre-1.0 beta. No catalog name or release is promised. These s
 
 Install the latest published revision, or pass an explicit reviewed commit for a reproducible pin. The plugin manager enforces the Hermes compatibility floor declared in `plugin.yaml`, but that floor does not guarantee private API seams remain stable; the current validator flags private Hermes-core imports that may break on any runtime release. Python 3.11–3.14 must satisfy the chosen Hermes runtime. Linux is the tested platform; other OSes and gateway versions are not independently accepted.
 
-The current static plugin audit reports isolation `in_process` and `host_ready: false` because the removal runtime patches private Cron lock-state attributes. This is a static code-path classification, not proof of what a host-isolated runtime actually executes; runtime isolation behavior remains unverified.
+The remover's Cron inventory is read-only and does not patch Hermes Cron state; it refuses Tingle cleanup until every listed job is removed manually through Hermes after writers stop. The pinned-runtime CI checks exercise PluginManager registration and a tool call under both `host` and `in_process` isolation. See [uninstall](uninstall.md) for the manual Cron step and its limits.
 
 
 For a maintainer-only no-account rehearsal, use a new disposable HOME and HERMES_HOME outside the source tree. Keep real profiles, credentials, Google connections and gateway routes unavailable. Run the synthetic tests and privacy check described in [contributor development guidance](../CONTRIBUTING.md#development) first. Doctor registers a staged copy in an isolated home; this is not a full installer or live gateway test.

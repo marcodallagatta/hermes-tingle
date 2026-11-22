@@ -48,7 +48,7 @@ Use `-` for no due time, or provide an exact ISO date-time with an explicit UTC 
 
 ## Limits and removal
 
-No live account, original data or real gateway scan was used in repository verification. Coverage evidence is synthetic unless separately stated. No Drive, public-link fetch, attachment download, calendar or chat read is performed by this flow. The operator-local Tingle remover deletes both private look-back and shared-audit namespaces by default, with explicit keep available. Bare native manager removal has no plugin cleanup hook and can leave these directories; see [removal](uninstall.md). Revocation/removal does not erase provider or gateway copies.
+No live account, original data or real gateway scan was used in repository verification. Coverage evidence is synthetic unless separately stated. No Drive, public-link fetch, attachment download, calendar or chat read is performed by this flow. The operator-local Tingle remover deletes both private look-back and shared-audit namespaces by default, with explicit keep available; it leaves the plugin install and manager record intact. Remove any listed Cron jobs first, run Tingle cleanup with an explicit profile, then run `hermes -p <profile-name> plugins remove hermes-tingle`. Bare native manager removal before Tingle cleanup has no plugin cleanup hook and can leave these directories; see [removal](uninstall.md). Revocation/removal does not erase provider or gateway copies.
 
 
 ## Shared duplicate-read audit and revocation

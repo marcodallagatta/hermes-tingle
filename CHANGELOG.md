@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.2 - explicit-profile manual cleanup
+
+- Tingle removal now deletes only Tingle-owned profile resources. It requires an explicit profile, refuses while relevant Cron jobs remain, and leaves the plugin install and manager record intact. On success it prints `hermes -p <profile-name> plugins remove hermes-tingle` for the operator to run separately.
+- The pinned Hermes compatibility job fails on missing runtime imports and runs the native removal rehearsal separately from Tingle data cleanup in both DELETE and KEEP modes, with an explicit profile and isolated scratch home.
+- Local verification: 2,634 passed / 5 skipped under required Hermes runtime; 2,601 passed / 30 skipped in the clean environment. All required-run skips are retired Drive-source tests. Privacy gate, plugin validator (`host_ready: true`), Doctor, and DELETE/KEEP native-removal smoke passed; the pinned GitHub matrix has not run on this unpublished branch.
+
 ## 0.9.1 - nudge calibration
 
 - The generated daily-review prompt suppresses unchanged calendar transition pairs after an alert attempt; event-version/time changes are eligible for review again. Calendar event evidence is bound to the source grant generation captured before those event reads; stale-generation receipts fail closed, and Calendar revoke/purge deletes all marker/receipt rows. The local store keeps only a pair hash, source generation and alert timestamp for the 30-day suppression window; pending receipt rows contain a receipt hash, source generation, profile-policy hash and expiry, and are valid for 24 hours. Both are lazily purged on a later enabled scan. No event titles or descriptions are stored. The marker records an attempt, not delivery confirmation, and transition-only evidence does not wake a new model pass. Also suppress low-urgency service/account notices already received by email; create one quiet reminder only for a real deadline and reuse an existing reminder. Routine retry/delivery bookkeeping stays out of the follow-up list, while failures needing an owner decision remain reportable. Local verification: 2,587 passed, 22 skipped, 238 warnings; privacy gate passed; plugin validator passed with existing private-core and static `in_process`/`host_ready: false` caveats.

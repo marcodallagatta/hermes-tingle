@@ -1,5 +1,5 @@
 name: hermes-tingle
-version: "0.9.1"
+version: "0.9.2"
 requires_hermes: ">=0.23.1"
 description: Hermes Tingle commitment tracking and follow-up.
 author: Hermes Tingle contributors

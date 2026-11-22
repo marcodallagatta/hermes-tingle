@@ -8,6 +8,7 @@ import hermes_tingle_store as store
 import hermes_tingle_sources as sources
 import hermes_tingle_review as review
 import source_snapshot
+from runtime_support import hermes_import
 
 NOW=datetime(2026,11,16,12,tzinfo=timezone.utc)
 
@@ -149,7 +150,7 @@ def test_gate_bytes_are_measured_not_tokens_or_claimed_savings():
 
 
 def test_actual_pinned_cron_wake_gate_prevents_prompt_construction(monkeypatch):
-    scheduler=pytest.importorskip('cron.scheduler')
+    scheduler=hermes_import('cron.scheduler')
     import hermes_cli.config as config
     monkeypatch.setattr(config,'require_parseable_user_config',lambda:None)
     monkeypatch.setattr(scheduler,'_apply_monitor_gate',lambda *a:(None,None,None))
