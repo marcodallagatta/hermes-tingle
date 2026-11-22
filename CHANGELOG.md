@@ -7,7 +7,7 @@
 - Requires a Hermes runtime supported by the compatibility floor declared in `plugin.yaml`; Python 3.11-3.14, Linux tested.
 - Consequential owner commands, including approval decisions and listings, require a configured owner and verified private DM. Refusals cannot change owner-DM bindings.
 - Private chat discovery shares that verified-owner gate and accepts explicit `dm`/`private` labels case-insensitively.
-- Model evaluation stays default-off. When an owner opts in, requests are bounded, single-shot, tool-free and fail closed for unsupported or unpriced routes; accounting is content-free and labeled as estimates, not invoices.
+- Added explicit per-profile no-cap consent (v2, `monthly_limit_microeur: 0`) alongside the existing €5-capped v1 consent; profile defaults are unchanged. V2 also admits the documented direct OpenAI route without a Tingle cap, and only v2 can additionally admit reviewed models on the exact built-in direct Nous Chat Completions route after a fresh public catalog attestation; v1 capped admission remains limited to the documented direct OpenAI route. All evaluation is bounded, single-shot, tool-free and fail-closed for unsupported or unpriced routes; accounting remains content-free estimates, not invoices.
 - Setup and installation docs follow the latest published revision by default; exact commit pins remain available for reproducibility.
 - CI runs on pushes to `main`, pull requests and manual dispatch. Security reports use private vulnerability reporting.
 - Fresh first-run source choice is all-on or all-off; type `/tingle setup sources all` to keep the proposal or `/tingle setup sources none` to skip initial checks/grants, then enable selected sources individually if desired.
