@@ -202,28 +202,14 @@ with s.serialized_operation('sources'):
     assert out.strip()=="entered"
 
 
-def test_old_unconfirmed_batch_disclosed_without_due_item_and_not_self_replicated(db,monkeypatch,capsys):
+def test_old_unconfirmed_batch_stays_silent_without_due_item(db,monkeypatch,capsys):
     store.record_alert_emission(seed_outbox_items(store, ["HT-ABC123"], now=datetime.now(timezone.utc)-timedelta(days=1)),now=datetime.now(timezone.utc)-timedelta(days=1))
     monkeypatch.setattr(sources,"all_due_items",lambda **kwargs:[])
     assert due_alerts.main()==0
-    out=capsys.readouterr().out
-    assert "unconfirmed" in out and "HT-ABC123" not in out
+    assert capsys.readouterr().out==""
     assert scalar("SELECT count(*) FROM alert_emissions")==1
+    assert scalar("SELECT count(*) FROM alert_emissions WHERE surfaced_at IS NULL AND acked_at IS NULL")==1
     assert due_alerts.main()==0 and capsys.readouterr().out==""
-    store.acknowledge_alert_emissions()
-    assert due_alerts.main()==0 and capsys.readouterr().out==""
-
-
-def test_failed_disclosure_flush_reserved_but_not_emitted_or_delivered(db,monkeypatch):
-    store.record_alert_emission(seed_outbox_items(store, ["HT-ABC123"], now=datetime.now(timezone.utc)-timedelta(days=1)),now=datetime.now(timezone.utc)-timedelta(days=1))
-    monkeypatch.setattr(sources,"all_due_items",lambda **kwargs:[])
-    class Broken(io.StringIO):
-        def flush(self):raise OSError("synthetic flush failure")
-    monkeypatch.setattr(sys,"stdout",Broken())
-    assert due_alerts.main()==1
-    assert scalar("SELECT count(*) FROM alert_emissions WHERE surfaced_at IS NOT NULL")==1
-    assert scalar("SELECT count(*) FROM alert_emissions WHERE emitted_to_gateway_at IS NOT NULL OR acked_at IS NOT NULL")==0
-    assert due_alerts.main()==0  # no unbounded diagnostic retries after unknown output
 
 
 

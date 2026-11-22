@@ -664,8 +664,8 @@ def test_main_records_an_unconfirmed_emission_after_success(tmp_path, synthetic_
 
 
 def test_main_logs_before_emitting_so_a_failed_flush_stays_visible(tmp_path, synthetic_settings, monkeypatch):
-    # Log-then-emit closes the crash window: a batch whose emission fails is
-    # still logged unconfirmed (and later disclosed), never silently lost.
+    # The outbox record remains available for owner inspection even though the
+    # scheduled helper no longer repeats an uncertainty notice.
     import hermes_tingle_store as store
     _one_due_item(monkeypatch)
     monkeypatch.setattr(due_alerts.sys, "stdout", _RecordingStdout(fail=True))
@@ -682,19 +682,45 @@ def test_main_logs_before_emitting_so_a_failed_flush_stays_visible(tmp_path, syn
     assert notified_calls == []
 
 
-def test_old_unconfirmed_emissions_surface_once_without_item_content(tmp_path, synthetic_settings, monkeypatch, capsys):
+def test_old_unconfirmed_emissions_stay_silent_and_available_for_inspection(tmp_path, synthetic_settings, monkeypatch, capsys):
     import hermes_tingle_store as store
     store.record_alert_emission(seed_outbox_items(store, ["HT-F00D11"], now="2020-01-01T00:00:00+00:00"), now="2020-01-01T00:00:00+00:00")
     import hermes_tingle_sources as sources
     monkeypatch.setattr(sources, "all_due_items", lambda **kwargs: [])
 
     assert due_alerts.main() == 0
-    out = capsys.readouterr().out
-    assert "unconfirmed" in out
-    assert "HT-F00D11" not in out  # counts and times only, never old item content
+    assert capsys.readouterr().out == ""
+    rows = store.unsurfaced_emissions(older_than="2999-01-01T00:00:00+00:00")
+    assert len(rows) == 1
+    assert rows[0]["acked_at"] is None
+    assert "HT-F00D11" in rows[0]["item_ids"]
 
     assert due_alerts.main() == 0
-    assert "unconfirmed" not in capsys.readouterr().out  # disclosed once, then surfaced
+    assert capsys.readouterr().out == ""
+    assert len(store.unsurfaced_emissions(older_than="2999-01-01T00:00:00+00:00")) == 1
+
+
+def test_standalone_helper_copy_keeps_old_batch_silent(tmp_path, synthetic_settings, monkeypatch, capsys):
+    import runpy
+    import hermes_constants
+    import hermes_tingle_store as store
+    import hermes_tingle_sources as sources
+
+    monkeypatch.setattr(hermes_constants, "get_hermes_home", lambda: tmp_path)
+    store.record_alert_emission(seed_outbox_items(store, ["HT-F00D11"], now="2020-01-01T00:00:00+00:00"), now="2020-01-01T00:00:00+00:00")
+    monkeypatch.setattr(sources, "all_due_items", lambda **kwargs: [])
+    helper = tmp_path / "scripts" / "hermes_tingle_due.py"
+    helper.parent.mkdir()
+    source = due_alerts.__file__
+    assert source is not None
+    helper.write_bytes(Path(source).read_bytes())
+
+    copied = runpy.run_path(str(helper), run_name="tingle_profile_helper_test")
+    assert copied["main"]() == 0
+    assert capsys.readouterr().out == ""
+    rows = store.unsurfaced_emissions(older_than="2999-01-01T00:00:00+00:00")
+    assert len(rows) == 1 and rows[0]["acked_at"] is None
+
 
 
 def test_acked_emissions_do_not_surface(tmp_path, synthetic_settings, monkeypatch, capsys):
@@ -702,15 +728,6 @@ def test_acked_emissions_do_not_surface(tmp_path, synthetic_settings, monkeypatc
     batch_id = store.record_alert_emission(seed_outbox_items(store, ["HT-F00D11"], now="2020-01-01T00:00:00+00:00"), now="2020-01-01T00:00:00+00:00")
     store.mark_emission_flushed(batch_id)
     store.acknowledge_alert_emissions(store.get_alert_emission(batch_id)["receipt_token"], now="2020-01-02T00:00:00+00:00")
-    _one_due_item(monkeypatch)
-    assert due_alerts.main() == 0
-    assert "unconfirmed" not in capsys.readouterr().out
-
-
-def test_recent_emissions_stay_within_the_grace_period(tmp_path, synthetic_settings, monkeypatch, capsys):
-    import hermes_tingle_store as store
-    from datetime import datetime, timezone
-    store.record_alert_emission(seed_outbox_items(store, ["HT-F00D11"], now=datetime.now(timezone.utc)), now=datetime.now(timezone.utc))
     _one_due_item(monkeypatch)
     assert due_alerts.main() == 0
     assert "unconfirmed" not in capsys.readouterr().out
