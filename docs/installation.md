@@ -9,7 +9,7 @@ Install the latest published revision, or pass an explicit reviewed commit for a
 The current static plugin audit reports isolation `in_process` and `host_ready: false` because the removal runtime patches private Cron lock-state attributes. This is a static code-path classification, not proof of what a host-isolated runtime actually executes; runtime isolation behavior remains unverified.
 
 
-For a no-account rehearsal, use a new disposable HOME and HERMES_HOME outside the source tree. Keep real profiles, credentials, Google connections and gateway routes unavailable. Run the [automated checks](release-process.md#automated-evidence) first. Doctor registers a staged copy in an isolated home; this is not a full installer or live gateway test.
+For a maintainer-only no-account rehearsal, use a new disposable HOME and HERMES_HOME outside the source tree. Keep real profiles, credentials, Google connections and gateway routes unavailable. Run the synthetic tests and privacy check described in [contributor development guidance](../CONTRIBUTING.md#development) first. Doctor registers a staged copy in an isolated home; this is not a full installer or live gateway test.
 
 ## Reviewed custom-source installation
 

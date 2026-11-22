@@ -28,13 +28,13 @@ def test_readme_sample_is_valid_and_excludes_synthetic_ticket(tmp_path):
 def test_fresh_setup_docs_use_typed_source_choices():
     root = Path(__file__).resolve().parents[1]
     for relative in ("README.md", "docs/installation.md", "docs/beta-setup.md",
-                     "docs/onboarding.md", "docs/feature-tracker.md"):
+                     "docs/onboarding.md"):
         text = (root / relative).read_text(encoding="utf-8")
         assert "/tingle setup sources all" in text
         assert "/tingle setup sources none" in text
         assert "Keep all off for now" not in text
     for relative in ("README.md", "docs/installation.md", "docs/beta-setup.md",
-                     "docs/onboarding.md", "docs/feature-tracker.md"):
+                     "docs/onboarding.md"):
         assert "/tingle source enable <kind>" in (root / relative).read_text(encoding="utf-8")
 
 

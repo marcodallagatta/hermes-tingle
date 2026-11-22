@@ -1,6 +1,6 @@
 # Contributing
 
-Tingle is a public pre-1.0 beta and is not an approved Hermes catalog release. Tags, catalog submission and live deployment remain separate owner decisions. See [release process](docs/release-process.md).
+Tingle is a public pre-1.0 beta and is not an approved Hermes catalog release. Tags, catalog submission and live deployment remain separate owner decisions.
 
 ## Before opening an issue
 
@@ -17,7 +17,14 @@ python tools/check_privacy.py
 
 The normal suite blocks unmocked network, provider and process access. Keep fixtures synthetic. A change must not need a personal account, gateway, source grant or credential to pass. Add tests at the actual affected tool/command/helper/provider boundary. Migration tests must preserve later writes, aliases, consent and uncertain effects. Never use an old database restore as an automatic repair.
 
-When Hermes is available, use the isolated [admission checks](docs/release-process.md#automated-evidence). Read warnings as well as failures. Passing tests or the validator does not establish a successful live integration or catalog approval.
+When Hermes is available, prefer the existing admission runner in a disposable test environment with an isolated Hermes runtime. If you run plugin-manager checks directly, do so from that disposable runtime:
+
+```sh
+hermes plugins doctor /path/to/reviewed/plugin --ci
+hermes plugins validate /path/to/reviewed/plugin --install-deps
+```
+
+`validate --install-deps` can prepare and select an environment in the executing Hermes installation, and this is not a security sandbox. Read warnings as well as failures. These checks are not a security audit and do not establish a successful live integration or catalog approval.
 
 ## Voice and interaction style
 

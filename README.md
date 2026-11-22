@@ -174,7 +174,7 @@ Discovery considers at most 20 bounded excerpts (500 characters each) from authe
 
 Owner-DM `/tingle debug spend` shows content-free per-call estimates, usage totals and reserved spend. Estimates use the admitted route's verified pricing and may differ from provider billing; missing usage remains unknown rather than fabricated zero. Source revocation does not erase already-held provider or history copies.
 
-Script-first review gating and content-free byte/count diagnostics are described in [token efficiency](docs/token-efficiency.md). Unchanged chat leads are suppressed only after a successful, version-bound review acknowledgment, never just because a snapshot was emitted.
+Unchanged chat leads are suppressed only after a successful, version-bound review acknowledgment, never just because a snapshot was emitted.
 
 ## Privacy and data
 
@@ -202,9 +202,7 @@ The mascot in `docs/images/` is Hermes-inspired woodland artwork, with a winged 
 
 ## Shared status and release checks
 
-Public pre-1.0 beta: no catalog release or live deployment is implied by installation. See the [documentation index](docs/README.md), [installation](docs/installation.md), [diagnostics](docs/diagnostics.md), [uninstall and retained data](docs/uninstall.md), [contributing](CONTRIBUTING.md), [security reporting](SECURITY.md) and the [release process](docs/release-process.md).
-
-[Project roadmap](docs/feature-tracker.md) summarizes product direction and open engineering work.
+Public pre-1.0 beta: installation does not imply catalog approval or live deployment. See the [documentation index](docs/README.md), [installation](docs/installation.md), [diagnostics](docs/diagnostics.md), [uninstall and retained data](docs/uninstall.md), [contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md).
 
 Existing `OL-` references remain accepted as aliases after migration to displayed `HT-` IDs. The mapping is durable and applies to commands, tool actions and linked records; no clean start is needed. Keep a consistent database backup before any upgrade.
 
@@ -220,7 +218,7 @@ python3 -m pytest tests/ -q          # synthetic suite
 python3 tools/check_privacy.py       # privacy gate: no secrets or personal patterns
 ```
 
-Both GitHub workflows run on pushes to `main` and pull requests, and remain available by manual dispatch. Cloud results are separate from local tests; see the [release process](docs/release-process.md#automated-evidence).
+Both GitHub workflows run on pushes to `main` and pull requests, and remain available by manual dispatch. Cloud results are separate from local tests.
 
 ## Rollback
 
