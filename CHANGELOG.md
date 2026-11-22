@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.3 - quiet unconfirmed-batch reminders
+
+- Removed the scheduled unconfirmed-batch diagnostic from the script-only nudge output. Reminder attempts, stored cadence, the four-attempt cycle cap, batch history and `/tingle delivery` inspection remain unchanged.
+- Local verification: 2,600 passed, 30 skipped, 238 deprecation warnings; privacy gate passed. GitHub CI will run on the follow-up pull request.
+
 ## 0.9.2 - explicit-profile manual cleanup
 
 - Tingle removal now deletes only Tingle-owned profile resources. It requires an explicit profile, refuses while relevant Cron jobs remain, and leaves the plugin install and manager record intact. On success it prints `hermes -p <profile-name> plugins remove hermes-tingle` for the operator to run separately.
