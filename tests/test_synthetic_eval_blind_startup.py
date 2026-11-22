@@ -93,8 +93,12 @@ def test_missing_bootstrap_fails_closed(tmp_path):
     out = tmp_path / 'evidence-missing'
     r = run_runner(host, *actual_args(out))
     assert r.returncode == 1
-    assert "No module named 'hermes_bootstrap'" in r.stderr
-    assert not out.exists()
+    assert not out.exists()  # failed before any evidence directory was created
+    assert r.stdout.count('FAKE-BOOTSTRAP-FIRED') == 0
+    # The exact diagnostic depends on the host: a bare interpreter reports a
+    # missing module, while a real Hermes runtime may load its bootstrap and
+    # refuse for missing authentication. Both must fail closed before claim.
+    assert r.stderr.strip()
 
 
 def test_existing_out_refuses_before_startup(tmp_path):
