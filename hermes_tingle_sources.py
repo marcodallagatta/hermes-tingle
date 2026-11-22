@@ -2112,7 +2112,7 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
                      discovery_enabled: bool = False) -> dict[str, Any]:
     """Read only new/unreviewed candidates and due loops; never persists source bodies."""
     try:
-        load_settings()
+        snapshot_settings = load_settings()
     except ValueError:
         return {
             "email_sync": {"sync_mode": "unavailable", "pending_count": None},
@@ -2122,6 +2122,7 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
             "errors": ["Gmail and Calendar: profile configuration is missing or invalid; no sources were checked."],
             "untrusted_source_data": True,
         }
+    snapshot_policy_key = store.source_policy_key(snapshot_settings)
     now = now or datetime.now(timezone.utc)
     lookback_days = max(1, min(int(lookback_days), 30))
     upcoming_days = max(1, min(int(upcoming_days), 30))
@@ -2186,6 +2187,7 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
                       "review_complete": False, "incomplete_reasons": ["disabled"]}
 
     calendar_enabled = store.source_enabled("calendar")
+    calendar_generation = store.source_generation("calendar") if calendar_enabled else None
     calendar_kinds: set[str] = set()
     calendar_review: dict[str, Any] = {"enabled": calendar_enabled, "review_complete": True, "incomplete_reasons": []}
     if not calendar_enabled:
@@ -2193,6 +2195,8 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
         calendar_review["review_complete"] = False
         calendar_review["incomplete_reasons"] = ["disabled"]
     try:
+        if calendar_enabled and type(calendar_generation) is not int:
+            raise SourceReadError("Calendar grant generation unavailable; no event candidates accepted")
         try:
             workstream_exclusions = {value.strip().casefold() for value in load_settings()["workstream_exclude_values"]} if calendar_enabled else set()
         except ValueError as exc:
@@ -2211,7 +2215,7 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
                 items = _read_calendar_events(calendar, now, upcoming_days)
                 context = getattr(items, 'transition_context', items)
                 remaining = max(0, MAX_EVENTS - len(calendar_context))
-                calendar_context.extend(dict(item, source_generation=store.source_generation('calendar'))
+                calendar_context.extend(dict(item, source_generation=calendar_generation)
                                         for item in context[:remaining])
                 if len(context) > remaining or getattr(items, 'transition_context_incomplete', False):
                     calendar_context_incomplete = True
@@ -2221,7 +2225,7 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
                 for item in items:
                     if store.source_reviewed("calendar", item["source_id"], item["source_version"]):
                         continue
-                    item["source_generation"] = store.source_generation("calendar")
+                    item["source_generation"] = calendar_generation
                     events.append(item)
                     if len(events) >= MAX_EVENTS:
                         break
@@ -2308,6 +2312,18 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
         due_items=len(loops), errors=len(errors), checkpoint_checks=len(email_checkpoint_checks),
         reply_checks=len(email_reply_checks), case_items=min(len(active_items), 12),
         chat_matches=len(chat_review.get('matches') or [])))
+    calendar_transition_snapshot = calendar_transitions.build(
+        calendar_context, now=now, timezone_name=load_settings()['timezone'],
+        coverage_complete=calendar_review['review_complete'] and not calendar_context_incomplete)
+    if calendar_enabled and calendar_generation is not None:
+        calendar_transition_snapshot.update(store.prepare_calendar_transition_pairs(
+            calendar_transition_snapshot['events'], calendar_transition_snapshot['pairs'],
+            source_generation=calendar_generation, expected_policy_key=snapshot_policy_key, now=now))
+    else:
+        calendar_transition_snapshot.update({
+            'suppressed_pair_count': 0,
+            'untracked_pair_count': len(calendar_transition_snapshot['pairs']) if calendar_enabled else 0,
+        })
     snapshot = {
         "generated_at": now.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "lookback_days": lookback_days,
@@ -2329,9 +2345,7 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
         "calendar_events": events,
         "calendar_names": [c["summary"] for c in calendars],
         "calendar_review": calendar_review,
-        "calendar_transitions": calendar_transitions.build(
-            calendar_context, now=now, timezone_name=load_settings()['timezone'],
-            coverage_complete=calendar_review['review_complete'] and not calendar_context_incomplete),
+        "calendar_transitions": calendar_transition_snapshot,
         "chat_review": chat_review,
         "errors": errors,
         "diagnostics": diagnostics,

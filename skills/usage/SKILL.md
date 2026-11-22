@@ -1,7 +1,7 @@
 ---
 name: usage
 description: Hermes Tingle commitment tracking and follow-up. Use whenever the owner mentions Tingle, a commitment, reminder, follow-up, waiting on a reply, or merging duplicate reminders.
-version: 0.9.0
+version: 0.9.1
 author: Hermes Tingle contributors
 license: MIT
 platforms: [linux]
@@ -110,7 +110,7 @@ Reviewed look-back imports may add a separate unverified expiry one-off; uncerta
 
 ## Calendar transitions (introduced)
 
-The scheduled review may include bounded `calendar_transitions` from the same in-scope Calendar fetch, including already-reviewed events. Pairs are evidence, not conflict verdicts. Interpret listed start versus verified actual timing and arrival/journey/seating buffers before warning; unknown venue or journey facts stay uncertain. Never use a universal pre-show interval. Read-only official venue lookup only when material, with no private event details in search. No event/item/message mutation is authorized by a pair. Existing silent-cycle wake gate stays unchanged, so reviewed pairs alone do not start another model pass. No exhaustive conflict coverage or real-model quality claim.
+The scheduled review may include bounded `calendar_transitions` from the same in-scope Calendar fetch, including already-reviewed events. Pairs are evidence, not conflict verdicts. Interpret listed start versus verified actual timing and arrival/journey/seating buffers before warning; unknown venue or journey facts stay uncertain. Never use a universal pre-show interval. Read-only official venue lookup only when material, with no private event details in search. No event/item/message mutation is authorized by a pair. Existing silent-cycle wake gate stays unchanged, so reviewed pairs alone do not start another model pass. For an unreported material warning, call `mark_calendar_transition_alerted` with that pair's exact opaque receipt and source generation before including it; this records an alert attempt, not confirmed delivery. The local store retains only a hash of the event-pair identity/version and source grant generation for a 30-day suppression window, lazily purged on the next enabled scan. Pending receipts are valid for 24 hours; the store keeps their receipt hash, grant generation and profile-policy hash, purging expired rows on the next scan. It stores no event titles or descriptions. These hashes are content-free, not anonymization. An unchanged pair/version is suppressed for 30 days; changed event versions/timing are eligible again. Missing/stale receipts fail closed. It does not add a model pass or exhaustive coverage.
 
 
 ### Explicit unscheduled-checkpoint recovery (introduced)

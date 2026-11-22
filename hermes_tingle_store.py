@@ -171,6 +171,19 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS calendar_transition_alerts (
+            pair_key TEXT PRIMARY KEY CHECK(length(pair_key)=64),
+            alerted_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS calendar_transition_receipts (
+            receipt_hash TEXT PRIMARY KEY CHECK(length(receipt_hash)=64),
+            pair_key TEXT NOT NULL CHECK(length(pair_key)=64),
+            source_generation INTEGER NOT NULL,
+            policy_key TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_calendar_transition_receipts_pair
+            ON calendar_transition_receipts(pair_key, expires_at);
         CREATE TABLE IF NOT EXISTS gmail_pending_messages (
             message_id TEXT PRIMARY KEY,
             queued_at TEXT NOT NULL
@@ -1979,6 +1992,8 @@ def _purge_source_retained(conn: sqlite3.Connection, kind: str, *, preserve_rece
         removed += conn.execute("DELETE FROM plugin_meta WHERE key GLOB 'gmail_*' OR key IN ('trash_review_cursor','due_review_reply_cursor')").rowcount
     elif kind == "calendar":
         removed += conn.execute("DELETE FROM source_seen WHERE source_type='calendar'").rowcount
+        removed += conn.execute("DELETE FROM calendar_transition_alerts").rowcount
+        removed += conn.execute("DELETE FROM calendar_transition_receipts").rowcount
         removed += conn.execute("DELETE FROM plugin_meta WHERE key GLOB 'calendar_*'").rowcount
     return removed
 
@@ -2954,6 +2969,155 @@ def mark_source_reviewed(source_type: str, source_id: str, source_version: str =
     except SourceOptInRevoked:
         conn.rollback()
         return False
+    finally:
+        conn.close()
+
+
+
+def _calendar_transition_pair_key(events: list[dict[str, Any]], pair: dict[str, Any], generation: int) -> str:
+    identities = []
+    for field in ("from_event", "to_event"):
+        index = pair.get(field)
+        if type(index) is not int or not 0 <= index < len(events):
+            raise ValueError("invalid calendar transition pair")
+        event = events[index]
+        event_generation = event.get("source_generation")
+        if event_generation is not None and event_generation != generation:
+            raise ValueError("stale calendar event generation")
+        source_id = str(event.get("source_id", "")).strip()
+        if not source_id:
+            raise ValueError("calendar transition source ID missing")
+        identities.append({
+            "source_id": source_id,
+            "source_version": str(event.get("source_version", "")),
+            "start": str(event.get("start", "")),
+            "end": str(event.get("end", "")),
+            "unconfirmed": bool(event.get("unconfirmed", False)),
+        })
+    identities.sort(key=lambda value: (value["source_id"], value["source_version"], value["start"], value["end"]))
+    payload = json.dumps({"generation": generation, "events": identities}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(b"hermes-tingle-calendar-transition-v1\0" + payload.encode("utf-8")).hexdigest()
+
+
+@serialized("sources")
+def prepare_calendar_transition_pairs(
+    events: list[dict[str, Any]], pairs: list[dict[str, Any]], *,
+    source_generation: int, expected_policy_key: str | None = None, now: Any = None,
+) -> dict[str, Any]:
+    """Attach one-run receipts; persist only pair hashes and suppress unchanged alerted pairs."""
+    now_dt = _now(now)
+    now_s = now_dt.isoformat(timespec="seconds")
+    if type(source_generation) is not int:
+        raise ValueError("calendar source generation is required")
+    policy_key = expected_policy_key or source_policy_key()
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _require_source(conn, "calendar")
+        grant = conn.execute("SELECT generation FROM hermes_tingle_source_optins WHERE kind='calendar'").fetchone()
+        if not grant or grant[0] != source_generation:
+            raise ValueError("stale calendar generation; scan again before preparing transition receipts")
+        conn.execute("DELETE FROM calendar_transition_receipts WHERE expires_at<=?", (now_s,))
+        conn.execute("DELETE FROM calendar_transition_alerts WHERE alerted_at<?", ((now_dt - timedelta(days=30)).isoformat(timespec="seconds"),))
+        if source_policy_key() != policy_key:
+            conn.commit()
+            return {"events": events, "pairs": [dict(pair, source_generation=source_generation, receipt_unavailable=True) for pair in pairs],
+                    "suppressed_pair_count": 0, "untracked_pair_count": len(pairs)}
+        kept_pairs: list[dict[str, Any]] = []
+        kept_indices: set[int] = set()
+        suppressed = 0
+        untracked = 0
+        for pair in pairs:
+            try:
+                key = _calendar_transition_pair_key(events, pair, source_generation)
+            except (TypeError, ValueError):
+                valid_indices = [index for index in (pair.get("from_event"), pair.get("to_event"))
+                                 if type(index) is int and 0 <= index < len(events)]
+                untracked += 1
+                if len(valid_indices) == 2:
+                    kept_pairs.append(dict(pair, source_generation=source_generation, receipt_unavailable=True))
+                    kept_indices.update(valid_indices)
+                continue
+            alerted = conn.execute("SELECT 1 FROM calendar_transition_alerts WHERE pair_key=?", (key,)).fetchone()
+            if alerted:
+                suppressed += 1
+                conn.execute("DELETE FROM calendar_transition_receipts WHERE pair_key=?", (key,))
+                continue
+            receipt = secrets.token_urlsafe(24)
+            receipt_hash = hashlib.sha256(receipt.encode("ascii")).hexdigest()
+            conn.execute("DELETE FROM calendar_transition_receipts WHERE pair_key=?", (key,))
+            conn.execute(
+                "INSERT INTO calendar_transition_receipts(receipt_hash,pair_key,source_generation,policy_key,expires_at) VALUES(?,?,?,?,?)",
+                (receipt_hash, key, source_generation, policy_key, (now_dt + timedelta(hours=24)).isoformat(timespec="seconds")),
+            )
+            decorated = dict(pair)
+            decorated.update({"source_generation": source_generation, "transition_receipt": receipt, "already_alerted": False})
+            kept_pairs.append(decorated)
+            kept_indices.update((pair["from_event"], pair["to_event"]))
+        ordered = sorted(kept_indices)
+        remap = {old: new for new, old in enumerate(ordered)}
+        for pair in kept_pairs:
+            if "from_event" in pair and "to_event" in pair:
+                pair["from_event"] = remap[pair["from_event"]]
+                pair["to_event"] = remap[pair["to_event"]]
+        if source_policy_key() != policy_key:
+            conn.rollback()
+            return {"events": events, "pairs": [dict(pair, source_generation=source_generation, receipt_unavailable=True) for pair in pairs],
+                    "suppressed_pair_count": 0, "untracked_pair_count": len(pairs)}
+        conn.commit()
+        return {
+            "events": [events[index] for index in ordered],
+            "pairs": kept_pairs,
+            "suppressed_pair_count": suppressed,
+            "untracked_pair_count": untracked,
+        }
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@serialized("sources")
+def mark_calendar_transition_alerted(transition_receipt: str, *, source_generation: int, now: Any = None) -> bool:
+    """Consume a fresh scan receipt and suppress that exact event-pair/version for 30 days."""
+    if not source_enabled("calendar"):
+        raise ValueError("calendar source is disabled; transition alert was not marked")
+    token = str(transition_receipt or "").strip()
+    if len(token) < 20 or len(token) > 128 or any(ch.isspace() for ch in token):
+        raise ValueError("invalid calendar transition receipt")
+    if type(source_generation) is not int:
+        raise ValueError("calendar source_generation is required")
+    now_dt = _now(now)
+    now_s = now_dt.isoformat(timespec="seconds")
+    policy_key = source_policy_key()
+    receipt_hash = hashlib.sha256(token.encode("ascii", errors="strict")).hexdigest()
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _require_source(conn, "calendar")
+        grant = conn.execute("SELECT generation FROM hermes_tingle_source_optins WHERE kind='calendar'").fetchone()
+        row = conn.execute(
+            "SELECT pair_key,source_generation,policy_key,expires_at FROM calendar_transition_receipts WHERE receipt_hash=?",
+            (receipt_hash,),
+        ).fetchone()
+        if (not grant or grant[0] != source_generation or not row
+                or row["source_generation"] != source_generation
+                or row["policy_key"] != policy_key
+                or row["expires_at"] <= now_s):
+            raise ValueError("calendar transition receipt is stale or unavailable; no marker was written")
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO calendar_transition_alerts(pair_key,alerted_at) VALUES(?,?)",
+            (row["pair_key"], now_s),
+        )
+        conn.execute("DELETE FROM calendar_transition_receipts WHERE receipt_hash=?", (receipt_hash,))
+        if source_policy_key() != policy_key:
+            raise ValueError("calendar policy changed during alert mark; no marker was written")
+        conn.commit()
+        return bool(cur.rowcount)
+    except BaseException:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

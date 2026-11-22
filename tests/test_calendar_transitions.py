@@ -1,13 +1,14 @@
 """Synthetic evidence/prompt contracts, not a real-model semantic evaluation."""
 import copy
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import pytest
 import hermes_tingle_calendar_transitions as transitions
 import hermes_tingle_sources as sources
 import hermes_tingle_store as store
 import setup_jobs
 import source_snapshot
+from schemas import HERMES_TINGLE
 
 NOW = datetime(2027, 1, 4, 8, tzinfo=timezone.utc)
 
@@ -100,6 +101,246 @@ def test_snapshot_passes_reviewed_context_but_preserves_gate(monkeypatch):
     snapshot['emails']=[{'source_id':'synthetic'}]
     payload=json.loads(source_snapshot.build_agent_input(snapshot))['source_snapshot']
     assert len(payload['calendar_transitions']['pairs'])==1 and payload['untrusted_source_data']
+    assert payload['calendar_transitions']['pairs'][0]['transition_receipt'] == snapshot['calendar_transitions']['pairs'][0]['transition_receipt']
+
+
+def test_reported_conflict_pair_is_suppressed_until_event_version_changes(monkeypatch):
+    import hermes_tingle
+
+    store.disable_source('email')
+    store.disable_source('chat')
+    monkeypatch.setattr(store, '_now', lambda value=None: NOW)
+    pair_events = [event('a', '10:00', '11:00'), event('b', '11:00', '12:00')]
+    items = sources._CalendarEvents()
+    items.transition_context = pair_events
+    monkeypatch.setattr(sources, '_read_calendars', lambda: [{'id': 'synthetic', 'summary': 'Synthetic'}])
+    monkeypatch.setattr(sources, '_read_calendar_events', lambda *args: items)
+
+    first = sources.collect_snapshot(now=NOW)
+    first_pair = first['calendar_transitions']['pairs'][0]
+    receipt = first_pair['transition_receipt']
+    generation = first_pair['source_generation']
+    marked = json.loads(hermes_tingle.handle_tool(None, {
+        'action': 'mark_calendar_transition_alerted',
+        'transition_receipt': receipt,
+        'source_generation': generation,
+    }))
+    assert marked['success'] and marked['already_alerted'] is False and marked['delivery_confirmed'] is False
+    replay = json.loads(hermes_tingle.handle_tool(None, {
+        'action': 'mark_calendar_transition_alerted',
+        'transition_receipt': receipt,
+        'source_generation': generation,
+    }))
+    assert replay['success'] is False
+    connection = store._connect()
+    try:
+        stored_keys = [row[0] for row in connection.execute('SELECT pair_key FROM calendar_transition_alerts')]
+    finally:
+        connection.close()
+
+    expected_key = store._calendar_transition_pair_key(first['calendar_transitions']['events'], first_pair, generation)
+    assert expected_key in stored_keys
+
+    repeated = sources.collect_snapshot(now=NOW)
+    assert repeated['calendar_transitions']['pairs'] == []
+    assert repeated['calendar_transitions']['suppressed_pair_count'] == 1
+
+    pair_events[1]['source_version'] = 'v2'
+    changed = sources.collect_snapshot(now=NOW)
+    changed_pair = changed['calendar_transitions']['pairs'][0]
+    assert changed_pair["transition_receipt"] != receipt
+    assert changed_pair["already_alerted"] is False
+
+
+def test_stale_transition_receipt_cannot_mute_new_source_generation(monkeypatch, tmp_path):
+    import hermes_tingle
+
+    store.disable_source('email')
+    store.disable_source('chat')
+    monkeypatch.setattr(store, '_now', lambda value=None: NOW)
+    pair_events = [event('a', '10:00', '11:00'), event('b', '11:00', '12:00')]
+    items = sources._CalendarEvents()
+    items.transition_context = pair_events
+    monkeypatch.setattr(sources, '_read_calendars', lambda: [{'id': 'synthetic', 'summary': 'Synthetic'}])
+    monkeypatch.setattr(sources, '_read_calendar_events', lambda *args: items)
+    snapshot = sources.collect_snapshot(now=NOW)
+    pair = snapshot['calendar_transitions']['pairs'][0]
+
+    active_db = (tmp_path / 'default-test.db').read_bytes()
+    assert b'synthetic:a' not in active_db and b'synthetic:b' not in active_db
+    assert b'Synthetic event a' not in active_db and b'Synthetic event b' not in active_db
+    assert pair['transition_receipt'].encode() not in active_db
+    conn = store._connect()
+    try:
+        assert conn.execute('SELECT COUNT(*) FROM calendar_transition_receipts').fetchone()[0] == 1
+        assert conn.execute('SELECT COUNT(*) FROM calendar_transition_receipts WHERE receipt_hash=?', (pair['transition_receipt'],)).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    store.disable_source('calendar')
+    store.enable_source('calendar', enabled_by='synthetic re-consent')
+    stale = json.loads(hermes_tingle.handle_tool(None, {
+        'action': 'mark_calendar_transition_alerted',
+        'transition_receipt': pair['transition_receipt'],
+        'source_generation': pair['source_generation'],
+    }))
+    assert stale['success'] is False
+    conn = store._connect()
+    try:
+        assert conn.execute('SELECT COUNT(*) FROM calendar_transition_alerts').fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    refreshed = sources.collect_snapshot(now=NOW)
+    new_pair = refreshed['calendar_transitions']['pairs'][0]
+    assert new_pair['source_generation'] != pair['source_generation']
+    assert new_pair['transition_receipt'] != pair['transition_receipt']
+    db_bytes = (tmp_path / 'default-test.db').read_bytes()
+    assert b'synthetic:a' not in db_bytes and b'synthetic:b' not in db_bytes
+    assert b'Synthetic event a' not in db_bytes and b'Synthetic event b' not in db_bytes
+    assert pair['transition_receipt'].encode() not in db_bytes
+
+
+def test_policy_change_invalidates_calendar_transition_receipt(monkeypatch, tmp_path):
+    import hermes_tingle
+
+    store.disable_source('email')
+    store.disable_source('chat')
+    monkeypatch.setattr(store, '_now', lambda value=None: NOW)
+    pair_events = [event('a', '10:00', '11:00'), event('b', '11:00', '12:00')]
+    items = sources._CalendarEvents()
+    items.transition_context = pair_events
+    monkeypatch.setattr(sources, '_read_calendars', lambda: [{'id': 'synthetic', 'summary': 'Synthetic'}])
+    monkeypatch.setattr(sources, '_read_calendar_events', lambda *args: items)
+    snapshot = sources.collect_snapshot(now=NOW)
+    pair = snapshot['calendar_transitions']['pairs'][0]
+
+    config_path = tmp_path / 'hermes-tingle.json'
+    settings = json.loads(config_path.read_text())
+    settings['delivery'] = 'telegram:-1009876543210:99'
+    config_path.write_text(json.dumps(settings))
+    stale = json.loads(hermes_tingle.handle_tool(None, {
+        'action': 'mark_calendar_transition_alerted',
+        'transition_receipt': pair['transition_receipt'],
+        'source_generation': pair['source_generation'],
+    }))
+    assert stale['success'] is False
+    conn = store._connect()
+    try:
+        assert conn.execute('SELECT COUNT(*) FROM calendar_transition_alerts').fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_calendar_revoke_purges_alert_markers_and_pending_receipts(monkeypatch):
+    import hermes_tingle
+
+    store.disable_source('email')
+    store.disable_source('chat')
+    monkeypatch.setattr(store, '_now', lambda value=None: NOW)
+    pair_events = [
+        event('a', '10:00', '11:00'),
+        event('b', '11:00', '12:00'),
+        event('c', '12:00', '13:00'),
+    ]
+    items = sources._CalendarEvents()
+    items.transition_context = pair_events
+    monkeypatch.setattr(sources, '_read_calendars', lambda: [{'id': 'synthetic', 'summary': 'Synthetic'}])
+    monkeypatch.setattr(sources, '_read_calendar_events', lambda *args: items)
+    snapshot = sources.collect_snapshot(now=NOW)
+    assert len(snapshot['calendar_transitions']['pairs']) == 2
+    first_pair = snapshot['calendar_transitions']['pairs'][0]
+    marked = json.loads(hermes_tingle.handle_tool(None, {
+        'action': 'mark_calendar_transition_alerted',
+        'transition_receipt': first_pair['transition_receipt'],
+        'source_generation': first_pair['source_generation'],
+    }))
+    assert marked['success']
+    remaining = sources.collect_snapshot(now=NOW)['calendar_transitions']
+    assert len(remaining['pairs']) == 1 and remaining['suppressed_pair_count'] == 1
+    remapped = remaining['pairs'][0]
+    assert remapped['transition_receipt']
+    assert {remaining['events'][remapped[index]]['source_id'] for index in ('from_event', 'to_event')} == {'synthetic:b', 'synthetic:c'}
+
+    conn = store._connect()
+    try:
+        assert conn.execute('SELECT COUNT(*) FROM calendar_transition_alerts').fetchone()[0] == 1
+        assert conn.execute('SELECT COUNT(*) FROM calendar_transition_receipts').fetchone()[0] == 1
+    finally:
+        conn.close()
+
+    store.disable_source('calendar')
+    conn = store._connect()
+    try:
+        assert conn.execute('SELECT COUNT(*) FROM calendar_transition_alerts').fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM calendar_transition_receipts').fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    store.enable_source('calendar', enabled_by='synthetic restore')
+    restored = sources.collect_snapshot(now=NOW)
+    first_pair = restored['calendar_transitions']['pairs'][0]
+    marked = json.loads(hermes_tingle.handle_tool(None, {
+        'action': 'mark_calendar_transition_alerted',
+        'transition_receipt': first_pair['transition_receipt'],
+        'source_generation': first_pair['source_generation'],
+    }))
+    assert marked['success']
+    assert store.purge_source_retained('calendar') >= 2
+    conn = store._connect()
+    try:
+        assert conn.execute('SELECT COUNT(*) FROM calendar_transition_alerts').fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM calendar_transition_receipts').fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_calendar_receipt_uses_generation_captured_before_event_fetch(monkeypatch):
+    store.disable_source('email')
+    store.disable_source('chat')
+    initial_generation = store.source_generation('calendar')
+    pair_events = [event('a', '10:00', '11:00'), event('b', '11:00', '12:00')]
+    items = sources._CalendarEvents()
+    items.transition_context = pair_events
+    monkeypatch.setattr(sources, '_read_calendars', lambda: [{'id': 'synthetic', 'summary': 'Synthetic'}])
+
+    def revoke_and_regrant_after_read(*args):
+        store.disable_source('calendar')
+        store.enable_source('calendar', enabled_by='synthetic re-consent')
+        return items
+
+    monkeypatch.setattr(sources, '_read_calendar_events', revoke_and_regrant_after_read)
+    with pytest.raises(ValueError, match='stale calendar generation'):
+        sources.collect_snapshot(now=NOW)
+    assert store.source_generation('calendar') != initial_generation
+    conn = store._connect()
+    try:
+        assert conn.execute('SELECT COUNT(*) FROM calendar_transition_receipts').fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_calendar_receipt_expires_and_cannot_be_replayed(monkeypatch):
+    store.disable_source('email')
+    store.disable_source('chat')
+    monkeypatch.setattr(store, '_now', lambda value=None: value if value is not None else NOW)
+    pair_events = [event('a', '10:00', '11:00'), event('b', '11:00', '12:00')]
+    items = sources._CalendarEvents()
+    items.transition_context = pair_events
+    monkeypatch.setattr(sources, '_read_calendars', lambda: [{'id': 'synthetic', 'summary': 'Synthetic'}])
+    monkeypatch.setattr(sources, '_read_calendar_events', lambda *args: items)
+    snapshot = sources.collect_snapshot(now=NOW)
+    pair = snapshot['calendar_transitions']['pairs'][0]
+
+    with pytest.raises(ValueError, match='stale or unavailable'):
+        store.mark_calendar_transition_alerted(
+            pair['transition_receipt'], source_generation=pair['source_generation'],
+            now=NOW + timedelta(hours=24))
+    conn = store._connect()
+    try:
+        assert conn.execute('SELECT COUNT(*) FROM calendar_transition_alerts').fetchone()[0] == 0
+    finally:
+        conn.close()
 
 
 def test_context_disabled_calendar_does_not_enable_or_read_it(monkeypatch):
@@ -115,7 +356,11 @@ def test_no_additional_model_job_or_gate_and_prompt_requires_context(synthetic_s
     prompt=jobs[0]['prompt']
     for instruction in ('not a conflict verdict','raw timestamp overlap alone','no universal cinema',
                         'arrival, journey and seating buffers','timing is unknown','reliable current read-only venue source',
-                        'No login, contact, booking or external mutation','separate owner consent','coverage_complete is false'):
+                        'No login, contact, booking or external mutation','separate owner consent','coverage_complete is false',
+                        'transition_receipt and source_generation','mark_calendar_transition_alerted',
+                        'This records an alert attempt, not verified delivery','If no receipt is present, do not call the action',
+                        'Receipt tokens and suppression/count fields are internal only'):
         assert instruction in prompt
     assert '20 minutes' not in prompt and 'twenty minutes' not in prompt
     assert jobs[0]['enabled_toolsets']==['hermes_tingle','web','no_mcp']
+    assert 'mark_calendar_transition_alerted' in HERMES_TINGLE['parameters']['properties']['action']['enum']
