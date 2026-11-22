@@ -39,7 +39,7 @@ def build_host(tmp_path, with_bootstrap=True):
     return host
 
 
-def run_runner(host, *args, fake_mode='once', hops=None, facade_imports=True):
+def run_runner(host, *args, fake_mode='once', hops=None, facade_imports=True, no_site=False):
     env = dict(os.environ)
     env['PYTHONPATH'] = str(host)
     env['FAKE_BOOTSTRAP'] = fake_mode
@@ -47,7 +47,12 @@ def run_runner(host, *args, fake_mode='once', hops=None, facade_imports=True):
     env.pop(HOPS_ENV, None)
     if hops is not None:
         env[HOPS_ENV] = hops
-    cmd = [sys.executable, str(host / 'scripts' / 'synthetic_eval_blind.py'), *args]
+    cmd = [sys.executable]
+    if no_site:
+        # Exclude the installed Hermes venv's hermes_bootstrap so this fixture
+        # really tests the missing-module case, not host-specific startup.
+        cmd.append('-S')
+    cmd.extend([str(host / 'scripts' / 'synthetic_eval_blind.py'), *args])
     proc = _REAL_POPEN(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     stdout, stderr = proc.communicate(timeout=120)
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
@@ -91,14 +96,11 @@ def test_inherited_hop_marker_bounds_reexec(tmp_path):
 def test_missing_bootstrap_fails_closed(tmp_path):
     host = build_host(tmp_path, with_bootstrap=False)
     out = tmp_path / 'evidence-missing'
-    r = run_runner(host, *actual_args(out))
+    r = run_runner(host, *actual_args(out), no_site=True)
     assert r.returncode == 1
-    assert not out.exists()  # failed before any evidence directory was created
+    assert "No module named 'hermes_bootstrap'" in r.stderr
     assert r.stdout.count('FAKE-BOOTSTRAP-FIRED') == 0
-    # The exact diagnostic depends on the host: a bare interpreter reports a
-    # missing module, while a real Hermes runtime may load its bootstrap and
-    # refuse for missing authentication. Both must fail closed before claim.
-    assert r.stderr.strip()
+    assert not out.exists()  # failed before any evidence directory was created
 
 
 def test_existing_out_refuses_before_startup(tmp_path):
