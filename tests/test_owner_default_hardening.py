@@ -121,6 +121,67 @@ def test_prior_source_grant_blocks_automatic_bootstrap(guided):  # noqa: F811
     assert not (data / 'setup-state.json').exists()
 
 
+@pytest.mark.parametrize('state', [
+    '{"state":"completed","items":[]}',
+    '{"state":"declined"}',
+])
+def test_prior_onboarding_marker_blocks_automatic_bootstrap(guided, state):  # noqa: F811
+    home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
+    _write_db(data / 'data.db', [
+        'create table plugin_meta (key text primary key, value text not null)',
+        "insert into plugin_meta values ('onboarding_state', '" + state + "')",
+    ])
+    out = ctx.command('setup', source=source)
+    assert 'No Tingle owner is configured' in out
+    assert not (data / 'setup-state.json').exists()
+
+
+def test_unmanifested_legacy_helper_blocks_automatic_bootstrap(guided):  # noqa: F811
+    home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
+    helper = home / 'scripts' / 'hermes_tingle_due.py'
+    helper.parent.mkdir()
+    helper.write_text('# legacy helper without provenance')
+    out = ctx.command('setup', source=source)
+    assert 'No Tingle owner is configured' in out
+    assert not (data / 'setup-state.json').exists()
+
+
+def test_unmanifested_tingle_cron_job_blocks_automatic_bootstrap(guided):  # noqa: F811
+    home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
+    cron = home / 'cron'
+    cron.mkdir()
+    (cron / 'jobs.json').write_text(json.dumps({'jobs': [{
+        'id': 'legacy-tingle-review', 'name': 'Tingle daily review',
+        'script': 'hermes_tingle_snapshot.py',
+    }]}))
+    out = ctx.command('setup', source=source)
+    assert 'No Tingle owner is configured' in out
+    assert not (data / 'setup-state.json').exists()
+
+
+def test_unrelated_cron_job_does_not_block_automatic_bootstrap(guided):  # noqa: F811
+    home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
+    cron = home / 'cron'
+    cron.mkdir()
+    (cron / 'jobs.json').write_text(json.dumps({'jobs': [{
+        'id': 'weekly-cleanup', 'name': 'Weekly cleanup', 'script': 'cleanup.py',
+        'enabled_toolsets': ['web'],
+    }]}))
+    out = ctx.command('setup', source=source)
+    assert '/tingle setup destination' in out
+    assert (data / 'setup-state.json').exists()
+
+
+def test_malformed_cron_inventory_blocks_automatic_bootstrap(guided):  # noqa: F811
+    home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
+    cron = home / 'cron'
+    cron.mkdir()
+    (cron / 'jobs.json').write_text('{"jobs": [')
+    out = ctx.command('setup', source=source)
+    assert 'No Tingle owner is configured' in out
+    assert not (data / 'setup-state.json').exists()
+
+
 def _write_manifest(home, text):
     (home / '.tingle-resources.json').write_text(text)
 

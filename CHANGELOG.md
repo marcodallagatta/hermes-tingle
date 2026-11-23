@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.14 - fail closed on legacy onboarding state
+
+- Fresh-profile owner bootstrap now treats the onboarding marker, copied Tingle helpers and unmanifested Tingle Cron jobs as prior install state. Unreadable or malformed Cron inventories also block automatic defaults; unrelated valid Cron jobs remain allowed.
+- Added regressions for completed/declined onboarding, legacy helpers, Tingle jobs, malformed inventories and unrelated Cron jobs. Docs now spell out the actual freshness boundary.
+- Local verification: **2,728 passed, 30 skipped**; privacy gate passed; `hermes plugins validate --install-deps` passed with known private-core-import warnings. Cloud CI and independent review are pending on the final commit.
+
 ## 0.9.13 - finish auto-owner setup activation
 
 - Install and setup docs now describe the supported one-step enabled install and fresh-profile owner defaulting from the Telegram home channel. Operator provisioning is documented only for older profiles, a non-DM home channel or a deliberate owner change; `--no-enable` is reserved for inspecting unreviewed candidates.

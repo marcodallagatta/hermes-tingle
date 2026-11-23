@@ -76,6 +76,10 @@ def _no_duplicate_keys(pairs):
     return result
 
 
+def _reject_json_constant(value):
+    raise ValueError('non-standard JSON constant')
+
+
 def _strict_manifest(home):
     """Reject duplicate keys and malformed entries before trusting provenance."""
     path = resources.safe(home / resources.MANIFEST, home)
@@ -101,6 +105,38 @@ def _prior_tingle_state(home):
         return True
     if (home / '.tingle-removal-recovery').exists():
         return True
+    # Older installations may predate the provenance manifest. Existing copied
+    # helpers or profile Cron entries are still evidence of prior Tingle state.
+    for name in ('hermes_tingle_snapshot.py', 'hermes_tingle_due.py'):
+        helper = resources.safe(home / 'scripts' / name, home)
+        if helper.exists():
+            return True
+    cron_path = resources.safe(home / 'cron' / 'jobs.json', home)
+    if cron_path.exists():
+        try:
+            cron = json.loads(_read(cron_path).decode('utf-8-sig'),
+                              object_pairs_hook=_no_duplicate_keys,
+                              parse_constant=_reject_json_constant)
+            jobs = cron.get('jobs') if isinstance(cron, dict) else None
+            if not isinstance(jobs, list):
+                return True
+            for job in jobs:
+                if (not isinstance(job, dict) or not isinstance(job.get('id'), str)
+                        or not isinstance(job.get('name'), str)
+                        or not isinstance(job.get('script'), (str, type(None)))):
+                    return True
+                toolsets = job.get('enabled_toolsets', job.get('toolsets', []))
+                if not isinstance(toolsets, list):
+                    return True
+                if ('tingle' in job['name'].casefold()
+                        or Path(str(job.get('script') or '')).name in
+                        ('hermes_tingle_snapshot.py', 'hermes_tingle_due.py')
+                        or 'hermes_tingle' in toolsets):
+                    return True
+        except Exception:
+            # An unreadable or ambiguous scheduler inventory cannot prove this
+            # is a fresh profile; fail closed rather than bootstrap authority.
+            return True
     manifest = home / resources.MANIFEST
     if manifest.exists():
         # The first setup reply records only its private draft. Any other
@@ -139,6 +175,7 @@ def _prior_tingle_state(home):
                 ('hermes_tingle_source_optins', "where enabled=1 or generation>0 or enabled_at is not null or note != ''"),
                 ('chat_source_consents', ''),
                 ('onboarding_item_journal', ''),
+                ('plugin_meta', "where key='onboarding_state'"),
                 ('hermes_tingle_steps', ''),
             )
             for table, clause in checks:
