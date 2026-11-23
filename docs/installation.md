@@ -31,6 +31,18 @@ Omit `-p <profile>` for the default profile. Replace any remaining angle-bracket
 
 Installing/enabling alone schedules no Tingle jobs or source reads. For a fresh install, an operator provisions the owner principal as described in [onboarding](onboarding.md); the owner completes `/tingle setup` in a verified DM and reviews the source choice before explicit `WRITE`. Gmail, Calendar and chat are proposed on for fresh profiles through one **all-or-none** choice: type `/tingle setup sources all` to keep the proposal, or `/tingle setup sources none` to avoid all initial checks and grants. These are typed commands in the new-profile wizard. After setup, enable desired sources individually with `/tingle source enable <kind>` (`email`, `calendar` or `chat`), each with its own minimal check and grant. Selected checks/grants are applied only after `WRITE`. Private evaluation remains OFF unless separately consented. Existing valid policy and grants are not reset. Owner identity is never inferred from a first caller or username.
 
+### If the model cannot use Tingle tools
+
+Tingle's direct chat commands work without the model tool. In the owner's DM, use `/tingle done HT-1A2B3C` (or the matching `/tingle snooze` or `/tingle dismiss` command) for a one-off action; these commands do not depend on the model seeing `hermes_tingle`.
+
+For natural-language or other model-driven Tingle actions, the active profile must enable the `hermes_tingle` toolset for that platform. If it is missing, explicitly opt in for that profile and platform with Hermes' supported CLI command:
+
+```sh
+hermes -p <profile> tools enable --platform telegram hermes_tingle
+```
+
+Use `-p default` to target the default profile explicitly; omitting `-p` can select a sticky active profile instead. Replace `telegram` with the target platform. The change takes effect in a fresh session or after `/reset`, but it is not strictly limited to that platform: Hermes may also clear a matching entry from the profile-wide `agent.disabled_toolsets` list, which can enable the toolset on other platforms whose saved lists already include it, and enabling the plugin through the plugin manager can add `hermes_tingle` to every saved platform toolset list for that profile. A saved platform list may intentionally omit a known plugin toolset, so Tingle does not enable itself or override that choice automatically; these Hermes enable paths change saved lists only when you explicitly enable the tool or plugin. Review the saved lists afterwards if you rely on a per-platform opt-out. Never edit `config.yaml` by hand.
+
 ## Updating an existing installation
 
 Update through the Hermes plugin manager, for example `hermes -p <profile> plugins update hermes-tingle`, or reinstall an exact reviewed commit with `hermes -p <profile> plugins install https://github.com/marcodallagatta/hermes-tingle.git --ref <full-commit> --force`, then verify in a DM that `/tingle` answers. Do not hand-checkout the installed plugin tree with raw git: the running gateway keeps its stale slash-command registry (`Unknown command /tingle`) until a restart, because only the manager's reload step refreshes it. Verify the exact verbs on the selected runtime with `hermes plugins --help`. If replies are stale after an update, have an operator restart the gateway from a separate terminal (`hermes gateway restart`) and start a new session before using `/tingle`: a manager reload can leave the long-running plugin host on the old Python tool code, so replies may still show the previous version. Check the version your replies report. An update changes no policy, jobs, source grants or destinations by itself.
