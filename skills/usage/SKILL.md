@@ -1,7 +1,7 @@
 ---
 name: usage
 description: Hermes Tingle commitment tracking and follow-up. Use whenever the owner mentions Tingle, a commitment, reminder, follow-up, waiting on a reply, or merging duplicate reminders.
-version: 0.9.3
+version: 0.9.4
 author: Hermes Tingle contributors
 license: MIT
 platforms: [linux]
@@ -79,7 +79,9 @@ V2 also admits reviewed Chat Completions models on the exact built-in direct `no
 - Use `complete` only when the user says the work is done or reliable evidence verifies completion.
 - A recipient reply may complete a wait-only email item, but it does not automatically resolve a broader responsibility. Track any new action separately and verify the wider task is finished before completing it.
 - Use `snooze` when the user postpones an item; do not silently delete records.
-- `/tingle` lists items; `/tingle done HT-XXXXXX`, `/tingle snooze HT-XXXXXX 2d`, `/tingle dismiss HT-XXXXXX`, and `/tingle setup` are direct controls.
+- Automatic staleness is deterministic, not a model judgment: items with `due_at` close 7 days after due once 3 reminder attempts have been reserved; waits on another actor (including a linked reply-wait) close after 270 days without meaningful activity; other undated items close after 90 days without meaningful activity. `auto_close_at` is capped at 365 days from `created_at`. A due/check-date change alone, a reminder reservation, or a routine scan does not reset meaningful activity; owner edits, snooze and structured progress do. The next daily review backfills missing fields on legacy active rows from `created_at` and applies retirement after collecting evidence.
+- `auto_closed` is not `done` or `dismissed`: it means Tingle retired stale tracking. It is excluded from active/unresolved reminders, remains available through `hermes_tingle(action="list", list_status="auto_closed")` and `get`, and can be explicitly reopened before its hard age cap. It does not delete the row or linked history. A fresh source signal in the current audit defers soft retirement for the agent to interpret; the 365-day cap still wins.
+- `/tingle` lists unresolved items; `/tingle done HT-XXXXXX`, `/tingle snooze HT-XXXXXX 2d`, `/tingle dismiss HT-XXXXXX`, and `/tingle setup` are direct controls.
 - In user-facing chat messages (Telegram and other gateways), wrap each Hermes Tingle item ID in inline code (for example, `HT-1A2B3C`).
 - Render dates and times in user-facing messages as human-readable dates in the configured timezone, include the year, and avoid raw ISO timestamps.
 - The item store is the source of truth. Session transcripts and Hindsight are not task status.

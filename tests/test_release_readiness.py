@@ -238,9 +238,20 @@ def test_fresh_and_ambiguous_upgrade_sources_off_explicit_grants_preserved(db):
 
 def test_legacy_alias_works_through_tool_commands_and_relations(db):
     item=store.add_item(title="Synthetic old reference")
-    conn=store._connect();conn.execute("UPDATE hermes_tingle_items SET id='OL-ABC123' WHERE id=?",(item["id"],));conn.commit();conn.close()
+    conn=store._connect()
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("UPDATE hermes_tingle_items SET id='OL-ABC123' WHERE id=?",(item["id"],))
+    conn.execute("UPDATE hermes_tingle_retirement SET item_id='OL-ABC123' WHERE item_id=?",(item["id"],))
+    conn.commit()
+    conn.close()
     migrated=store.get_item("OL-ABC123")
+    assert migrated is not None
     assert migrated["id"].startswith("HT-")
+    assert store.retirement_state(migrated["id"]) is not None
+    conn=store._connect()
+    assert conn.execute("SELECT 1 FROM hermes_tingle_retirement WHERE item_id='OL-ABC123'").fetchone() is None
+    conn.close()
     assert store.get_item(migrated["id"])["id"]==migrated["id"]
     store.add_document("OL-ABC123",name="Synthetic alias document")
     assert store.get_item("OL-ABC123")["documents"][0]["name"]=="Synthetic alias document"

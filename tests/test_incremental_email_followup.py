@@ -390,10 +390,10 @@ def test_due_review_rotates_failed_checks_and_manual_items_without_changing_them
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     watches = [isolated_store.add_item(title=f"Wait {i}", source_type="email",
         source_ref=f"gmail:a1d5d4103d619e71d41f4d8e96798978615d95d0ed9f31a860b4524840fd8ccf/thread-{i}#sent-{i}", status="waiting", owner="other",
-        completion_signal="source_email_reply_received", now="2020-01-01T00:00:00+00:00",
+        completion_signal="source_email_reply_received", now="2025-12-01T00:00:00+00:00",
         next_check_at="2020-01-02T00:00:00+00:00") for i in range(80)]
     manual = [isolated_store.add_item(title=f"Review {i}", source_type="manual",
-        now="2020-01-01T00:00:00+00:00", next_check_at="2020-01-03T00:00:00+00:00") for i in range(35)]
+        now="2025-12-01T00:00:00+00:00", next_check_at="2020-01-03T00:00:00+00:00") for i in range(35)]
     monkeypatch.setattr(sources, "_collect_email_candidates", lambda **kwargs: {"emails": [], "errors": []})
     monkeypatch.setattr(sources, "_read_email_completion_signals", lambda: ([], []))
     monkeypatch.setattr(sources, "_read_calendars", lambda: [])

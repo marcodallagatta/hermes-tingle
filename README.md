@@ -161,6 +161,8 @@ Source collection, regrants, revocation and retained-data writes serialize acros
 
 For a clear unanswered sent request, Tingle can track a `waiting` item on the exact email thread, with per-message timing, and stop nudging after four tries.
 
+Tingle also retires stale active items automatically: dated items close 7 days after their due date once three reminder attempts have been reserved; open-ended waits close after 270 days without meaningful activity; other undated items after 90 days; and no item stays active beyond 365 days from creation. Real edits and structured progress reset inactivity, routine reminders do not. A newly changed source gets one review before soft retirement; the one-year cap still applies. `auto_closed` items leave active follow-ups but remain in history, distinct from work marked done. Existing items get these dates on the next normal daily review; no manual scan is needed.
+
 ## Permissions and safety
 
 - **Approvals are records only in this beta.** Each request binds one action and its exact parameters and expires; approve/reject records your decision. Nothing is executed or sent. Any future executor needs separate implementation and review.

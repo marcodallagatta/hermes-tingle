@@ -37,7 +37,9 @@ def test_snapshot_main_loads_current_profile_before_source_reads(tmp_path, synth
         return {"emails": [{"source_id": "m-1"}]}
     monkeypatch.setattr(sources, "collect_snapshot", collect)
     assert source_snapshot.main() == 0
-    assert calls == [{"discovery_enabled": True}]
+    assert len(calls) == 1
+    assert calls[0]["discovery_enabled"] is True
+    assert calls[0]["now"].tzinfo is not None
     assert json.loads(capsys.readouterr().out)["profile_timezone"] == "Asia/Tokyo"
 
 
@@ -54,20 +56,25 @@ def test_snapshot_main_wires_chat_history_before_local_discovery(monkeypatch, ca
     monkeypatch.setattr(discovery, 'stage_local_candidates', lambda snapshot: calls.append('stage') or 0)
     assert source_snapshot.main() == 0
     assert calls[0] == 'wire'
-    assert calls[1] == ('collect', {'discovery_enabled': True})
+    assert calls[1][0] == 'collect'
+    assert calls[1][1]["discovery_enabled"] is True
+    assert calls[1][1]["now"].tzinfo is not None
     assert calls[2] == 'stage'
     assert '"wakeAgent": false' in capsys.readouterr().out
 
 
-def test_snapshot_main_missing_config_does_not_read_sources(tmp_path, monkeypatch):
-    import pytest
+def test_snapshot_main_missing_config_does_not_read_sources(tmp_path, monkeypatch, capsys):
     import hermes_tingle_sources as sources
     (tmp_path / "hermes-tingle.json").unlink()
-    calls = []
-    monkeypatch.setattr(sources, "collect_snapshot", lambda **kwargs: calls.append(kwargs))
-    with pytest.raises(ValueError, match="config"):
-        source_snapshot.main()
-    assert calls == []
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid profile config must prevent source reads")
+
+    monkeypatch.setattr(sources, "_collect_email_candidates", forbidden)
+    monkeypatch.setattr(sources, "_read_calendars", forbidden)
+    assert source_snapshot.main() == 0
+    output = capsys.readouterr().out
+    assert "invalid" in output.casefold() or "configuration" in output.casefold()
 
 
 def test_source_snapshot_wakes_for_candidates_and_fences_them_as_data():

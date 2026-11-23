@@ -64,10 +64,26 @@ def test_fixed_day_recurrence_still_supported(isolated_store):
     assert done["due_at"] == "2026-03-03T09:00:00+00:00"
 
 
-def test_yearly_recurrence_clamps_leap_day(isolated_store):
-    bill = _bill(isolated_store, due_at="2028-02-29T09:00:00+00:00", recur_interval=1, recur_unit="year")
-    done = isolated_store.complete_item(bill["id"], now="2028-02-29T10:00:00+00:00")
-    assert done["due_at"] == "2029-02-28T09:00:00+00:00"
+def test_yearly_recurrence_clamps_leap_day_and_stops_at_item_cap(isolated_store):
+    bill = _bill(isolated_store, due_at="2028-02-29T09:00:00+00:00", recur_interval=1,
+                 recur_unit="year", now="2027-10-01T00:00:00+00:00")
+    first = isolated_store.complete_item(bill["id"], now="2028-02-29T10:00:00+00:00")
+    assert first["status"] == "open"
+    assert first["due_at"] == "2029-02-28T09:00:00+00:00"
+
+    final = isolated_store.complete_item(bill["id"], now="2029-02-28T10:00:00+00:00")
+    assert final["status"] == "done"
+    assert final["due_at"] == "2029-02-28T09:00:00+00:00"
+
+
+def test_yearly_date_math_retains_leap_anchor_without_long_lived_item(isolated_store):
+    anchor = datetime.fromisoformat("2028-02-29T09:00:00+00:00")
+    current = anchor
+    expected = ["2029-02-28", "2030-02-28", "2031-02-28", "2032-02-29", "2033-02-28"]
+    for day in expected:
+        current = isolated_store._advance_recurrence(
+            current, 1, "year", current + timedelta(hours=1), anchor)
+        assert current.isoformat(timespec="seconds") == f"{day}T09:00:00+00:00"
 
 
 def test_overdue_recurrence_skips_past_occurrences(isolated_store):
@@ -92,17 +108,6 @@ def test_repeated_monthly_completions_keep_the_anchor_day(isolated_store):
         assert done["due_at"] == f"{day}T09:00:00+00:00"
         # The persisted original anchor (Jan 31) prevents clamp drift.
         assert done["recur_anchor"] == "2026-01-31T09:00:00+00:00"
-        current_now = done["due_at"].replace("T09:00:00", "T10:00:00")
-
-
-def test_repeated_yearly_completions_return_to_leap_day(isolated_store):
-    bill = _bill(isolated_store, due_at="2028-02-29T09:00:00+00:00", recur_interval=1, recur_unit="year")
-    expected = ["2029-02-28", "2030-02-28", "2031-02-28", "2032-02-29", "2033-02-28"]
-    current_now = "2028-02-29T10:00:00+00:00"
-    for day in expected:
-        done = isolated_store.complete_item(bill["id"], now=current_now)
-        assert done["due_at"] == f"{day}T09:00:00+00:00"
-        assert done["recur_anchor"] == "2028-02-29T09:00:00+00:00"
         current_now = done["due_at"].replace("T09:00:00", "T10:00:00")
 
 

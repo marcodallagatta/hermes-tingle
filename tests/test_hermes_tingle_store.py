@@ -430,6 +430,88 @@ def test_legacy_table_migrates_to_hermes_tingle_and_renumbers_legacy_id(tmp_path
     assert "open_loops" not in tables
     assert migrated[1] == "Keep the old identifier"  # row and title preserved
     assert migrated[0].startswith("HT-")  # legacy OL- ID renumbered, not kept
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(hermes_tingle_items)")}
+    assert not ({"retirement_class", "retirement_last_activity_at", "auto_close_at", "retirement_evidence_key"} & columns)
+    assert "hermes_tingle_retirement" in tables
+    policy = conn.execute("SELECT 1 FROM hermes_tingle_retirement WHERE item_id=?", (migrated[0],)).fetchone()
+    assert policy is None  # next daily review owns legacy backfill
+    store.ensure_schema(conn)  # additive migration is idempotent
+    conn.execute(
+        "INSERT INTO hermes_tingle_items (id,title,created_at,updated_at) VALUES (?,?,?,?)",
+        ("HT-DEF456", "Old writer shape", "2026-11-14T12:00:00+01:00", "2026-11-14T12:00:00+01:00"),
+    )
+    assert conn.execute("SELECT * FROM hermes_tingle_retirement WHERE item_id='HT-DEF456'").fetchone() is None
+    conn.close()
+
+
+def test_legacy_retirement_columns_migrate_into_side_table_and_are_removed():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("""CREATE TABLE hermes_tingle_items (
+        id TEXT PRIMARY KEY,title TEXT NOT NULL,summary TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'open',owner TEXT NOT NULL DEFAULT 'me',
+        priority TEXT NOT NULL DEFAULT 'normal',source_type TEXT NOT NULL DEFAULT 'conversation',
+        source_ref TEXT NOT NULL DEFAULT '',source_url TEXT NOT NULL DEFAULT '',
+        completion_signal TEXT NOT NULL DEFAULT '',due_at TEXT,next_check_at TEXT,
+        snoozed_until TEXT,reminder_count INTEGER NOT NULL DEFAULT 0,last_notified_at TEXT,
+        created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT,
+        hard_deadline INTEGER NOT NULL DEFAULT 0,retirement_class TEXT NOT NULL DEFAULT '',
+        retirement_last_activity_at TEXT,auto_close_at TEXT,retirement_evidence_key TEXT
+    )""")
+    conn.execute(
+        """INSERT INTO hermes_tingle_items
+           (id,title,status,owner,created_at,updated_at,retirement_class,
+            retirement_last_activity_at,auto_close_at,retirement_evidence_key)
+           VALUES(?,?,?,?,?,?,?,?,?,?)""",
+        ("HT-ABC123", "Legacy lifecycle row", "open", "me", "2026-08-01T00:00:00+00:00",
+         "2026-11-20T00:00:00+00:00", "default", "2026-08-01T00:00:00+00:00",
+         "2026-10-30T00:00:00+00:00", "RTE1:" + "ab" * 512),
+    )
+
+    store.ensure_schema(conn)
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(hermes_tingle_items)")}
+    assert not ({"retirement_class", "retirement_last_activity_at", "auto_close_at", "retirement_evidence_key"} & columns)
+    policy = conn.execute("SELECT * FROM hermes_tingle_retirement WHERE item_id='HT-ABC123'").fetchone()
+    assert policy is not None
+    assert policy["retirement_class"] == "default"
+    assert policy["last_activity_at"] == "2026-08-01T00:00:00+00:00"
+    assert policy["auto_close_at"] == "2026-10-30T00:00:00+00:00"
+    assert policy["evidence_key"] == "RTE1:" + "ab" * 512
+    conn.close()
+
+
+def test_legacy_null_evidence_marker_preserves_migrated_policy():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("""CREATE TABLE hermes_tingle_items (
+        id TEXT PRIMARY KEY,title TEXT NOT NULL,summary TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'open',owner TEXT NOT NULL DEFAULT 'me',
+        priority TEXT NOT NULL DEFAULT 'normal',source_type TEXT NOT NULL DEFAULT 'conversation',
+        source_ref TEXT NOT NULL DEFAULT '',source_url TEXT NOT NULL DEFAULT '',
+        completion_signal TEXT NOT NULL DEFAULT '',due_at TEXT,next_check_at TEXT,
+        snoozed_until TEXT,reminder_count INTEGER NOT NULL DEFAULT 0,last_notified_at TEXT,
+        created_at TEXT NOT NULL,updated_at TEXT NOT NULL,completed_at TEXT,
+        hard_deadline INTEGER NOT NULL DEFAULT 0,retirement_class TEXT NOT NULL DEFAULT '',
+        retirement_last_activity_at TEXT,auto_close_at TEXT,retirement_evidence_key TEXT
+    )""")
+    conn.execute(
+        """INSERT INTO hermes_tingle_items
+           (id,title,status,owner,created_at,updated_at,retirement_class,
+            retirement_last_activity_at,auto_close_at,retirement_evidence_key)
+           VALUES(?,?,?,?,?,?,?,?,?,NULL)""",
+        ("HT-NULLKEY", "Legacy null marker", "open", "me", "2026-08-04T00:00:00+00:00",
+         "2026-11-23T00:00:00+00:00", "default", "2026-11-23T00:00:00+00:00",
+         "2027-02-21T00:00:00+00:00"),
+    )
+
+    store.ensure_schema(conn)
+
+    policy = conn.execute("SELECT * FROM hermes_tingle_retirement WHERE item_id='HT-NULLKEY'").fetchone()
+    assert policy is not None
+    assert policy["last_activity_at"] == "2026-11-23T00:00:00+00:00"
+    assert policy["auto_close_at"] == "2027-02-21T00:00:00+00:00"
+    assert policy["evidence_key"] == ""
     conn.close()
 
 
