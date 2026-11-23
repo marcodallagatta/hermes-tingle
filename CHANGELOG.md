@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.9.14 - fail closed on legacy onboarding state
+
+- Fresh-profile owner bootstrap now treats the onboarding marker, copied Tingle helpers and unmanifested Tingle Cron jobs as prior install state. Unreadable or malformed Cron inventories also block automatic defaults; unrelated valid Cron jobs remain allowed.
+- Added regressions for completed/declined onboarding, legacy helpers, Tingle jobs, malformed inventories and unrelated Cron jobs. Nullable `enabled_toolsets` is accepted as Hermes's default for unrelated jobs. Docs now spell out the actual freshness boundary.
+- Local verification: **2,730 passed, 30 skipped**; privacy gate passed; `hermes plugins validate --install-deps` passed with known private-core-import warnings. Cloud CI and independent review are pending on the final commit.
+
+## 0.9.13 - finish auto-owner setup activation
+
+- Install and setup docs now describe the supported one-step enabled install and fresh-profile owner defaulting from the Telegram home channel. Operator provisioning is documented only for older profiles, a non-DM home channel or a deliberate owner change; `--no-enable` is reserved for inspecting unreviewed candidates.
+- The immediate job-activation consent after `WRITE` now revalidates an auto-defaulted owner against the unchanged Telegram home-channel config rather than treating the just-saved policy/consumed marker as evidence of an old install. A changed config or sender still fails closed. Added a composed regression that reaches the job-consent question and schedules both jobs in the synthetic profile.
+- Local verification: **2,722 passed, 30 skipped** in the standalone test environment; privacy gate passed. CI will run on the exact pull-request head.
+
+## 0.9.12 - validate setup provenance manifests strictly
+
+- Automatic-owner freshness checking now rejects duplicate JSON keys and malformed manifest records instead of trusting permissive `json.loads`/the general resource reader. The setup wizard's own draft entry remains exempt, while any prior helper/job record blocks defaults. Added regressions for duplicate `files`/`jobs` keys and invalid draft entries.
+- Local verification: **2,721 passed, 30 skipped** in the standalone test environment; privacy gate passed. CI will run on the exact pull-request head.
+
+## 0.9.11 - distinguish wizard state from prior installs
+
+- The automatic-owner freshness check now permits only the wizard's own setup draft entry in the resource manifest. Any recorded helper, created namespace or Cron job still proves prior Tingle state and requires operator repair. Added regressions for helper/job provenance and the full multi-reply setup path.
+- Local verification: **2,718 passed, 30 skipped** in the standalone test environment; privacy gate passed. CI will run on the exact pull-request head.
+
+## 0.9.10 - keep owner-default setup usable across replies
+
+- The setup wizard's own `.tingle-resources.json` is no longer mistaken for evidence of a prior install; it is created on the first typed answer. Genuine prior state still blocks automatic defaults. Added a full-path regression through destination selection, subsequent reply, cancellation and restart.
+- Local verification: **2,716 passed, 30 skipped** in the standalone test environment; privacy gate passed. CI will run on the exact pull-request head.
+
+## 0.9.9 - harden automatic owner defaulting
+
+- Fresh-profile owner lookup now parses the profile config with Hermes's own YAML policy (`hermes_yaml`), not a hand-rolled scanner. Nested mappings, duplicate keys and invalid documents fail closed instead of admitting a different owner.
+- Automatic enrollment is Telegram-only; other gateways have no verified home-channel DM predicate here and still need operator provisioning.
+- Automatic bootstrap additionally refuses when prior Tingle state remains: policy backups, resource manifest/recovery data, non-empty lookback/body-audit namespaces, tracked items, source grants or onboarding/journal records. Admitted-chat metadata in an otherwise empty database is still harmless. Those profiles need operator repair, not reconstructed defaults.
+- Test harness mirrors Hermes's duplicate-key-rejecting YAML policy via an isolated PyYAML stub; `requirements-dev.txt` now pins PyYAML. Docs updated.
+- Local verification: **2,715 passed, 30 skipped** in the standalone test environment; privacy gate passed. All three independent-review findings were reproduced as failing regressions before the fix. CI will run on the exact pull-request head.
+
+## 0.9.8 - removal without stopping the gateway
+
+- The local remover no longer refuses cleanup just because the profile's gateway is running. With no Tingle Cron jobs left there is no scheduled Tingle writer; the process screen skips only the exact gateway PID reported for that profile, and other Hermes/Tingle processes still block removal.
+- Successful cleanup reports `gateway_restart_required`. The CLI tells the operator to restart from a separate terminal (`hermes gateway restart`), start a new session, and not to restart from the active chat. Running gateways keep stale slash commands/tool code until then.
+- The stopped-writers prompt now says the gateway may stay up. `docs/uninstall.md` documents the new flow and the restart notice.
+- Local verification: **2,708 passed, 30 skipped** in the standalone test environment; privacy gate passed. The live-gateway regression was mutation-probed against the old strict guard. CI will run on the exact pull-request head.
+
+## 0.9.7 - less onboarding friction
+
+- A fresh profile no longer needs `setup-owner.json`: `/tingle setup` in the owner DM takes `owner_principals` from the profile's configured home channel. A different sender, a group home channel or a missing/non-DM home channel is refused without creating a draft, so a stranger cannot self-enroll by DMing the bot. The operator file stays as an override and as the repair path for older profiles.
+- The missing-owner reply is plain language with copyable commands/filenames in backticks, and distinguishes a fresh profile from an older or broken one that needs operator repair.
+- The destination step gained `/tingle setup here` (and `/tingle setup destination here`) to use the verified DM you are in. The short form is accepted only with no extra arguments and only on the first field; the prompt shows the exact chat ID. Source grants, destination retype, `WRITE` confirmation and job activation are unchanged.
+- Docs and version metadata updated. Local verification: **2,705 passed, 30 skipped** in the standalone test environment; privacy gate passed. The owner guards and both shortcut paths were mutation-probed to confirm the regressions fail when the guards are removed. CI will run on the exact pull-request head.
+
 ## 0.9.6 - accept the newer Hermes pricing schema
 
 - Private evaluation now accepts the known `cache_write_1h_cost_per_million` field on Hermes `PricingEntry` when it is absent or `None`. A rated value (including zero) still disables evaluation because Tingle's reservation does not bound a separate 1-hour cache-write dimension; every other added or missing field continues to fail closed. No consent, source, destination, schedule or spending behavior changed.

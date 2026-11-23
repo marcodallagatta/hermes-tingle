@@ -13,18 +13,16 @@ This is the current setup packet for the public pre-1.0 beta. The owner runs set
 ## Install the plugin
 
 ```sh
-hermes -p <profile> plugins install https://github.com/marcodallagatta/hermes-tingle.git --no-enable
-hermes -p <profile> plugins show hermes-tingle
-hermes -p <profile> plugins enable hermes-tingle
+hermes -p <profile> plugins install https://github.com/marcodallagatta/hermes-tingle.git
 hermes -p <profile> plugins list --json
 ```
 
-For a reproducible reviewed pin, add `--ref <full-commit>` to the install command. Confirm the plugin is enabled and note the version the installed manifest reports. Omit `-p <profile>` for the default profile. Verify command names with `hermes plugins --help`.
+For a reproducible reviewed pin, add `--ref <full-commit>` to the install command. Confirm the plugin is enabled and note the version the installed manifest reports. Omit `-p <profile>` for the default profile. The manager installs and enables a reviewed plugin in one step; enabling schedules no jobs, reads no sources and grants no scopes. Use `--no-enable` only when deliberately inspecting an unreviewed candidate before enabling it. Verify command names with `hermes plugins --help`.
 
 ## Configure the profile in the owner DM
 
 1. Send `/tingle identity`. It shows the gateway-authenticated sender and chat IDs and never enrolls anyone. Owner format is `telegram:<user-id>`; destination format is `telegram:<chat-id>` or `telegram:<chat-id>:<topic-id>`. A destination is not proven to deliver until the first real cycle.
-2. Have the operator provision the owner principal once as described in [operator provisioning](onboarding.md#operator-provisioning). Nothing is enrolled by a first caller or a username.
+2. On a fresh Telegram profile no operator file is needed: send `/tingle setup` in the verified DM and the owner principal is taken from the profile's configured home channel. Older profiles, a non-DM home channel or a deliberate owner change still need [operator provisioning](onboarding.md#operator-provisioning). Nothing is enrolled by a first caller or a username.
 3. Send `/tingle setup` in the verified DM. It asks one question at a time for destination, timezone, review/deadline cadence, date-only time, availability, sources and optional private evaluation (suggestion OFF). New-policy defaults are reviews at 00:00, 08:00 and 16:00 in the chosen timezone, a 30-minute deadline job, 09:00 date-only time and 09:00–18:00 availability. The new-profile wizard proposes Gmail, Calendar and chat on; type `/tingle setup sources all` to keep them or `/tingle setup sources none` to avoid initial checks and grants. These are typed commands, not buttons. After setup, enable only desired sources individually with `/tingle source enable <kind> [days]`. Review the preview, retype the exact destination, then send `/tingle setup confirm WRITE`. Creating the two jobs is a separate choice.
 4. Send `/tingle sources` to review current grants. Enable only desired sources with `/tingle source enable <kind> [days]`; each enable performs a minimal connection check and grants that source only on success. `/tingle chats` and `/tingle chat exclude|include` control chat scope.
 5. On the first `/tingle` with an empty profile, an authenticated owner gets one bounded 30-day Gmail import offer. Accept or decline explicitly; `/tingle undo onboarding` removes exactly that import's items.

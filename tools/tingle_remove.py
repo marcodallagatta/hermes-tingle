@@ -44,7 +44,7 @@ def _run(argv=None):
     if args.plan:return 0
     print('DELETE is the default. Hermes history, unrelated backups/accounts/tokens and provider copies are not erased.')
     print('KEEP DATA explicitly selected.' if args.keep_data else 'All listed Tingle data/config/backups will be deleted.')
-    stopped=input('Stop all Tingle/Hermes writers yourself. Type ALL WRITERS STOPPED: ').strip()=='ALL WRITERS STOPPED'
+    stopped=input('Confirm no other Tingle/Hermes writers are running (the gateway may stay up). Type ALL WRITERS STOPPED: ').strip()=='ALL WRITERS STOPPED'
     needs_adoption=any(r['ownership']=='needs explicit adoption' and not (args.keep_data and r['kind'] in ('data','metadata')) for r in plan['resources'].values())
     adopted=False
     if needs_adoption:
@@ -58,6 +58,8 @@ def _run(argv=None):
         print(str(exc),file=sys.stderr);return 1
     print('Tingle cleanup complete. The plugin install and manager record were not changed.')
     print(json.dumps(result,sort_keys=True))
+    if result.get('gateway_restart_required'):
+        print('The gateway was left running. Restart it from a separate terminal with `hermes gateway restart`, then start a new session. Do not restart from the active chat.')
     if result['plugin_uninstall_required']:
         print('Run this explicit Hermes command to remove the plugin: '+plugin_command)
     return 0

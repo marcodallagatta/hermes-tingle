@@ -13,23 +13,24 @@ For a maintainer-only no-account rehearsal, use a new disposable HOME and HERMES
 
 ## Reviewed custom-source installation
 
-Until a catalog entry exists, install from the project repository. Use the latest published revision, or add `--ref <full-commit>` for a reproducible reviewed pin. Do not use a made-up catalog name:
+Until a catalog entry exists, install from the project repository. Use the latest published revision, or add `--ref <full-commit>` for a reproducible reviewed pin. Do not use a made-up catalog name. The plugin manager installs and enables the reviewed plugin in one step:
 
 ```sh
-hermes -p <profile> plugins install https://github.com/marcodallagatta/hermes-tingle.git --no-enable
-hermes -p <profile> plugins show hermes-tingle
-```
-
-Inspect the source, scanner warnings, capabilities and compatibility before enabling:
-
-```sh
-hermes -p <profile> plugins enable hermes-tingle
+hermes -p <profile> plugins install https://github.com/marcodallagatta/hermes-tingle.git
 hermes -p <profile> plugins list
 ```
 
+Afterwards verify registration with:
+
+```sh
+hermes -p <profile> plugins show hermes-tingle
+```
+
+Enabling a reviewed plugin schedules no jobs, reads no sources and grants no scopes. Only add `--no-enable` when you are deliberately inspecting an unreviewed candidate before enabling it; install-then-enable is not the normal path.
+
 Omit `-p <profile>` for the default profile. Replace any remaining angle-bracket placeholder; do not paste it literally. Verify syntax on the selected runtime with `hermes plugins --help`. If an unattended install refuses caution findings or dependency consent, stop for review. Do not add force flags, suppress the scanner or grant new capabilities to make a test green.
 
-Installing/enabling alone schedules no Tingle jobs or source reads. For a fresh install, an operator provisions the owner principal as described in [onboarding](onboarding.md); the owner completes `/tingle setup` in a verified DM and reviews the source choice before explicit `WRITE`. Gmail, Calendar and chat are proposed on for fresh profiles through one **all-or-none** choice: type `/tingle setup sources all` to keep the proposal, or `/tingle setup sources none` to avoid all initial checks and grants. These are typed commands in the new-profile wizard. After setup, enable desired sources individually with `/tingle source enable <kind>` (`email`, `calendar` or `chat`), each with its own minimal check and grant. Selected checks/grants are applied only after `WRITE`. Private evaluation remains OFF unless separately consented. Existing valid policy and grants are not reset. Owner identity is never inferred from a first caller or username.
+Installing/enabling alone schedules no Tingle jobs or source reads. On a fresh Telegram profile the owner completes `/tingle setup` in a verified DM; the owner principal is taken from that profile's configured home channel, so no operator file or terminal step is needed. Older profiles, a non-DM home channel or a deliberate owner change still need [operator provisioning](onboarding.md#operator-provisioning). The owner reviews the source choice before explicit `WRITE`. Gmail, Calendar and chat are proposed on for fresh profiles through one **all-or-none** choice: type `/tingle setup sources all` to keep the proposal, or `/tingle setup sources none` to avoid all initial checks and grants. These are typed commands in the new-profile wizard. After setup, enable desired sources individually with `/tingle source enable <kind>` (`email`, `calendar` or `chat`), each with its own minimal check and grant. Selected checks/grants are applied only after `WRITE`. Private evaluation remains OFF unless separately consented. Existing valid policy and grants are not reset. Owner identity is never inferred from a first caller or username.
 
 ### If the model cannot use Tingle tools
 

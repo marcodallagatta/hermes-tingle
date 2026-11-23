@@ -1,6 +1,6 @@
 # First run and local repair
 
-Owners set up Tingle in chat, not by running a Python script. An installer/operator first provisions the owner principal once for the intended profile. Local file-write access remains trusted: anyone running as the Hermes OS user can change plugin policy. Do not share that OS account with an untrusted person.
+Owners set up Tingle in chat, not by running a Python script. On a fresh Telegram profile the owner principal is taken from the profile's configured home channel during `/tingle setup`; older profiles, a non-DM home channel or a deliberate owner change need one operator provisioning step. Local file-write access remains trusted: anyone running as the Hermes OS user can change plugin policy. Do not share that OS account with an untrusted person.
 
 ## Before choosing accounts or reminders
 
@@ -10,7 +10,9 @@ Draft setup does not read accounts or messages. After explicit source consent an
 
 ## Operator provisioning
 
-This is an installer/admin action, **not an owner chat-enrollment step**. No caller, first message, button or typed reply creates an owner.
+On a fresh Telegram profile no operator file is needed. `/tingle setup` in the owner DM takes the owner from `platforms.telegram.home_channel` in the profile config. The home channel must be a positive Telegram user/chat ID (a DM) and the sender must match its configured user ID; a group home channel, a different sender, a non-Telegram platform or a malformed/ambiguous config is refused without creating a draft. A stranger cannot enroll themselves by DMing the bot. Automatic bootstrap is also refused when the profile still has prior Tingle policy backups or recovery data, manifest records for helpers/jobs or other non-wizard resources, copied Tingle helpers or Tingle Cron jobs even without a manifest, non-empty lookback/body-audit namespaces, tracked items, source grants, or onboarding state/journal records: that is an older install needing operator repair, not a fresh default. An unreadable or malformed Cron inventory also fails closed. Admitted-chat metadata and the setup wizard's own draft record in an otherwise empty database are harmless.
+
+The operator file below is for older profiles, a non-DM home channel, or a deliberate owner change. It remains an installer/admin action, **not an owner chat-enrollment step**. No caller, first message, button or typed reply creates an owner.
 
 1. Resolve the intended existing profile's real home (`HERMES_HOME`, or the explicit profile directory). Do not rely on a CLI sticky profile. Provision only a fresh Tingle install with no prior policy, source consent or tracker records; missing policy on an existing install requires restoration, not new defaults.
 2. Have the intended owner use `/tingle identity`; it displays gateway-authenticated sender and chat IDs without enrollment. Verify that principal through the operator's trusted relationship with the owner. A display name or chat ID alone is not ownership.
@@ -29,7 +31,7 @@ Existing **valid** policy uses its already-configured `owner_principals` for job
 
 In the authenticated owner DM, start with **`/tingle setup`**. Tingle asks one question at a time. Reply with the displayed `/tingle setup <field> <value>` command; these are typed authenticated commands, not free text in a choice panel:
 
-1. `destination` — explicit gateway destination. Telegram uses `telegram:<chat-id>[:<topic-id>]`; sender ID is not necessarily the destination. A bare supported platform selects its configured home channel. Syntax/platform validation does not prove a target exists or delivery works.
+1. `destination` — explicit gateway destination. Telegram uses `telegram:<chat-id>[:<topic-id>]`; sender ID is not necessarily the destination. A bare supported platform selects its configured home channel. Reply `/tingle setup here` (or `/tingle setup destination here`) to use the verified DM you are in; the shortcut is only accepted with no extra arguments and on the first field. Syntax/platform validation does not prove a target exists or delivery works.
 2. `timezone` — IANA timezone, e.g. `Europe/Berlin`.
 3. `review` — recurring cron; suggestion `0 0,8,16 * * *` (00:00, 08:00, 16:00 in that timezone).
 4. `deadline` — script-only deadline-check cadence in minutes; suggestion 30.
@@ -39,7 +41,7 @@ In the authenticated owner DM, start with **`/tingle setup`**. Tingle asks one q
 8. `evaluation` — reply `yes` for the recommended €5 cap, `no-cap` for explicitly no Tingle cap, or `no` for OFF; the default suggestion is **no (OFF)**, independent of the source choice. `yes` stages only the exact runtime-default private-evaluation consent described below, authenticated to this owner; `no` omits it. Source `none` may be combined with evaluator consent, but chat remains off and no excerpts can be sent.
 9. `exclusions` — one JSON object with explicit `calendar_exclude_substrings`, `workstream_exclude_values`, `source_exclude_substrings` and `ticket_exclude_patterns` string lists. Empty lists exclude nothing. No reply can edit the owner list.
 
-Answers are staged privately in `plugin-data/hermes-tingle/setup-state.json`, not runtime policy. The preview shows every policy value, the fixed operator-provisioned owners, source selection and data disclosure. Retype the exact destination with `/tingle setup confirm-destination <destination>`, then reply **`/tingle setup confirm WRITE`**. `write` or `Write` does not confirm. This uses the same validator and checked, atomic, no-clobber mode-0600 writer as the operator tool, and verifies the saved policy before proceeding.
+Answers are staged privately in `plugin-data/hermes-tingle/setup-state.json`, not runtime policy. The preview shows every policy value, the owners (defaulted from the profile home channel or operator-provisioned), source selection and data disclosure. Retype the exact destination with `/tingle setup confirm-destination <destination>`, then reply **`/tingle setup confirm WRITE`**. `write` or `Write` does not confirm. This uses the same validator and checked, atomic, no-clobber mode-0600 writer as the operator tool, and verifies the saved policy before proceeding.
 
 `/tingle setup cancel` discards the draft without policy, source or job changes. Unsupported/out-of-order replies, a mismatched destination/confirmation, expiry (30 minutes from start), or changed profile/authority/policy fail closed. Every reply is bound to the same authenticated sender and exact DM; another owner/chat cannot continue or cancel it. Expired drafts are discarded on the next setup reply; no timeout job is created. When filesystem maintenance prevents draft cleanup, the reply says so and requires operator inspection. No raw source content is retained in setup reports.
 
