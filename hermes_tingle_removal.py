@@ -145,14 +145,21 @@ def inventory(home, api=None):
 
 
 def verify_quiescent(home,api):
-    if api['gateway'](Path(home)) is not None:
-        raise ValueError('Gateway is live for this profile. Stop it explicitly before removal; no gateway was stopped.')
+    # A live gateway is allowed: with no Tingle jobs left (checked by remove())
+    # there is no scheduled Tingle writer. The running host can still hold stale
+    # plugin code, so the caller reports that a gateway restart is required.
+    # We skip only the exact PID reported for this profile, not other processes.
+    gateway_pid=api['gateway'](Path(home))
+    if gateway_pid is not None:
+        try:gateway_pid=int(gateway_pid)
+        except (TypeError,ValueError):raise ValueError('Unverifiable gateway PID; no cleanup attempted') from None
     # Conservative POSIX cross-process screen, no command lines or environment
     # secrets are returned. Other Hermes processes can hold plugin writers too.
     proc=Path('/proc')
     if not proc.is_dir():raise ValueError('Quiescence process inspection unavailable; no cleanup attempted')
     for path in proc.iterdir():
         if not path.name.isdigit() or int(path.name)==os.getpid():continue
+        if gateway_pid is not None and int(path.name)==gateway_pid:continue
         try:
             args=(path/'cmdline').read_bytes().split(b'\0')
         except (FileNotFoundError,ProcessLookupError):continue
@@ -192,6 +199,7 @@ def _remove_fenced(home,plan,*,keep_data,api):
     import fcntl
     if plan['jobs']:
         raise ValueError('Tingle Cron jobs remain; stop writers and remove them through Hermes before Tingle cleanup. Nothing changed.')
+    gateway_live_at_start=api['gateway'](Path(home)) is not None
     verify_quiescent(home,api)
     marker=resources.safe(home/resources.MARKER,home)
     if marker.exists():
@@ -278,8 +286,9 @@ def _remove_fenced(home,plan,*,keep_data,api):
                 path.unlink()
         if recovery.exists():recovery.rmdir()
         marker.unlink()
+        gateway_restart_required=gateway_live_at_start or api['gateway'](Path(home)) is not None
         return {'cleanup_completed':True,'plugin_uninstall_required':bool(plan['plugin_installed'] or plan['manager_record_present']),
-                'kept_data':keep_data,'limits':plan['limits']}
+                'kept_data':keep_data,'gateway_restart_required':gateway_restart_required,'limits':plan['limits']}
     except Exception as exc:
         # Keep the small maintenance marker deliberately after failure. It blocks
         # resurrection and is named in recovery instructions, never hidden.

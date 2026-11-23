@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.8 - removal without stopping the gateway
+
+- The local remover no longer refuses cleanup just because the profile's gateway is running. With no Tingle Cron jobs left there is no scheduled Tingle writer; the process screen skips only the exact gateway PID reported for that profile, and other Hermes/Tingle processes still block removal.
+- Successful cleanup reports `gateway_restart_required`. The CLI tells the operator to restart from a separate terminal (`hermes gateway restart`), start a new session, and not to restart from the active chat. Running gateways keep stale slash commands/tool code until then.
+- The stopped-writers prompt now says the gateway may stay up. `docs/uninstall.md` documents the new flow and the restart notice.
+- Local verification: **2,708 passed, 30 skipped** in the standalone test environment; privacy gate passed. The live-gateway regression was mutation-probed against the old strict guard. CI will run on the exact pull-request head.
+
 ## 0.9.7 - less onboarding friction
 
 - A fresh profile no longer needs `setup-owner.json`: `/tingle setup` in the owner DM takes `owner_principals` from the profile's configured home channel. A different sender, a group home channel or a missing/non-DM home channel is refused without creating a draft, so a stranger cannot self-enroll by DMing the bot. The operator file stays as an override and as the repair path for older profiles.
