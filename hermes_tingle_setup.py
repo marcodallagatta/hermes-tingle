@@ -23,10 +23,9 @@ except ImportError:
     import setup_jobs
 
 PROVISIONING = (
-    'Tingle needs reviewed profile policy and a pre-provisioned owner. An installer/operator must '
-    'provision the owner principal for this profile once; chat cannot enroll an owner. '
-    'See docs/onboarding.md#operator-provisioning (and its local repair section for existing invalid policy). '
-    'Then the owner can use /tingle setup in a verified DM. Nothing was changed.'
+    'No Tingle owner is configured here. New profiles take the owner from the configured home channel, '
+    'so `/tingle setup` in the owner DM is enough. Older or broken profiles need operator repair; use '
+    '`setup-owner.json` only when the home channel is not a DM. Nothing changed.'
 )
 OWNER = 'setup-owner.json'
 STATE = 'setup-state.json'
@@ -55,6 +54,70 @@ def _read(path):
         return stream.read()
 
 
+def _home_channel(text, platform):
+    """Read platforms.<platform>.home_channel from the small YAML subset Hermes uses.
+
+    No YAML dependency is added to the plugin: only this exact mapping is read,
+    and anything less explicit fails closed so the operator file remains the
+    fallback. Lists, inline maps and anchors are deliberately not interpreted.
+    """
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != 'platforms:' or line[:1] in (' ', '\t'):
+            continue
+        for position in range(index + 1, len(lines)):
+            candidate = lines[position]
+            if not candidate.strip() or candidate.lstrip().startswith('#'):
+                continue
+            indent = len(candidate) - len(candidate.lstrip())
+            if indent == 0:
+                break
+            if candidate.strip() != platform + ':':
+                continue
+            for deeper in range(position + 1, len(lines)):
+                row = lines[deeper]
+                if not row.strip() or row.lstrip().startswith('#'):
+                    continue
+                row_indent = len(row) - len(row.lstrip())
+                if row_indent <= indent:
+                    break
+                if row.strip() != 'home_channel:':
+                    continue
+                values = {}
+                for field_row in lines[deeper + 1:]:
+                    if not field_row.strip() or field_row.lstrip().startswith('#'):
+                        continue
+                    field_indent = len(field_row) - len(field_row.lstrip())
+                    if field_indent <= row_indent:
+                        break
+                    key, _, raw = field_row.strip().partition(':')
+                    if key in ('platform', 'user_id', 'chat_id'):
+                        values[key] = raw.strip().strip('"\'')
+                return values
+    return None
+
+
+def _profile_owner(home, binding):
+    """Fresh-profile owner from the configured home channel, never from a stranger DM."""
+    platform, user, _chat, _thread = binding
+    config = resources.safe(home / 'config.yaml', home)
+    try:
+        channel = _home_channel(config.read_text(), platform)
+    except (OSError, UnicodeError, ValueError):
+        return None
+    if not channel or str(channel.get('platform', '')).casefold() != platform:
+        return None
+    owner_user = str(channel.get('user_id', '') or '').strip()
+    owner_chat = str(channel.get('chat_id', '') or '').strip()
+    if not owner_user or not owner_chat or owner_user.casefold() != user.casefold():
+        return None
+    if platform == 'telegram':
+        # DM chat IDs are positive and match the sender; groups are never owners.
+        if not re.fullmatch(r'\d+', owner_chat) or owner_chat != owner_user:
+            return None
+    return [f'{platform}:{owner_user}'], _identity(config)
+
+
 def _binding(source):
     platform = getattr(source, 'platform', None)
     platform = str(getattr(platform, 'value', platform) or '')
@@ -69,16 +132,28 @@ def _binding(source):
 
 def _authority(home, data_dir, source):
     binding = _binding(source)
-    raw = _read(resources.safe(data_dir / OWNER, home))
-    data = json.loads(raw)
-    owners = data.get('owner_principals') if isinstance(data, dict) else None
-    if (not isinstance(data, dict) or data.get('fresh_profile') is not True
-            or not isinstance(owners, list) or not owners or any(
-            not isinstance(v, str) or not re.fullmatch(r'[a-z0-9_]+:[^\s:]+', v, re.I) for v in owners)):
-        raise ValueError(PROVISIONING)
+    owner_path = resources.safe(data_dir / OWNER, home)
+    if owner_path.exists():
+        raw = _read(owner_path)
+        data = json.loads(raw)
+        owners = data.get('owner_principals') if isinstance(data, dict) else None
+        if (not isinstance(data, dict) or data.get('fresh_profile') is not True
+                or not isinstance(owners, list) or not owners or any(
+                not isinstance(v, str) or not re.fullmatch(r'[a-z0-9_]+:[^\s:]+', v, re.I) for v in owners)):
+            raise ValueError(PROVISIONING)
+    else:
+        # No operator file: a genuinely fresh profile inherits the configured
+        # home-channel owner. Callers have already excluded existing policy and
+        # a consumed bootstrap; nobody self-enrolls from an arbitrary DM.
+        default = _profile_owner(home, binding)
+        if default is None:
+            raise ValueError(PROVISIONING)
+        owners, config_identity = default
+        raw = json.dumps({'owner_principals': owners, 'default': True}, ensure_ascii=False).encode()
+        return binding, owners, hashlib.sha256(raw).hexdigest(), config_identity
     if ':'.join(binding[:2]) not in {v.casefold() for v in owners}:
         raise OwnerRefused('Setup refused: this sender is not a configured owner principal. Nothing changed.')
-    return binding, owners, hashlib.sha256(raw).hexdigest(), _identity(data_dir / OWNER)
+    return binding, owners, hashlib.sha256(raw).hexdigest(), _identity(owner_path)
 
 
 def _save(home, path, state):
@@ -103,7 +178,10 @@ def _save(home, path, state):
 def _prompt(state):
     field = FIELDS[state['step']]
     hints = {
-        'destination': 'Where should reminders go? Use an explicit gateway destination, e.g. telegram:<chat-id>[:<topic-id>]. /tingle identity displays IDs; sender ID is not always the destination.',
+        'destination': 'Where should reminders go? Reply `/tingle setup here` to use this chat (`'
+                       + ':'.join((state['binding'][0], state['binding'][2])) + '`), or give an explicit '
+                       'destination like `telegram:<chat-id>[:<topic-id>]`. `/tingle identity` shows IDs; '
+                       'your sender ID is not always the chat destination.',
         'timezone': 'Which IANA timezone? Example: Europe/Berlin (default suggestion: Etc/UTC).',
         'review': 'Which review cron? Suggestion: 0 0,8,16 * * * (00:00, 08:00, 16:00 in your timezone).',
         'deadline': 'How many minutes between script-only deadline checks? Suggestion: 30; range 1–1440.',
@@ -134,6 +212,8 @@ def _apply(state, field, value):
     policy = state['policy']
     keys = {'destination': 'delivery', 'timezone': 'timezone', 'review': 'daily_schedule',
             'deadline': 'deadline_poll_minutes', 'date-only': 'date_only_time'}
+    if field == 'destination' and str(value).strip().casefold() == 'here':
+        value = ':'.join((state['binding'][0], state['binding'][2]))
     if field in keys:
         policy[keys[field]] = int(value) if field == 'deadline' else value
     elif field == 'availability':
@@ -228,6 +308,10 @@ def handle(ctx, raw, source):
             # Every reply is serialized with policy writes/removal and other replies.
             # Re-read after acquiring the fence; never write an older draft over a reply.
             state = json.loads(_read(state_path)) if state_path.exists() else None
+            # Exact-argument shortcut only: `/tingle setup here` on the first field.
+            # Any extra argument stays an unsupported reply, never a silent accept.
+            if state is not None and field == 'here' and not value and state['step'] == 0:
+                field, value = 'destination', 'here'
             if state is None:
                 if field:
                     return 'No setup draft in this profile. Start /tingle setup in the owner DM; nothing changed.'

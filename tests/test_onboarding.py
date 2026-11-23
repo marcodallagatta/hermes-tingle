@@ -113,7 +113,7 @@ def test_cancel_and_changed_during_confirmation(tmp_path, monkeypatch, synthetic
 def test_missing_config_orientation_and_identity_no_enrollment(tmp_path):
     (tmp_path / wizard.NAME).unlink()
     sender = SimpleNamespace(platform="telegram", user_id="42", chat_id="-123", is_bot=False)
-    assert "installer/operator" in plugin.handle_command(None, "")
+    assert "operator" in plugin.handle_command(None, "")
     assert "tingle_init.py" not in plugin.handle_command(None, "")
     assert "no item captured" in plugin.handle_tool(None, {"action": "add", "title": "x"})
     result = plugin.handle_command(None, "identity", source=sender)

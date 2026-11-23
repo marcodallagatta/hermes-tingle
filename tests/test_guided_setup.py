@@ -207,8 +207,8 @@ def test_missing_policy_points_to_operator_not_owner_terminal(guided, command):
     home, data, source, ctx = guided
     (data / 'setup-owner.json').unlink()
     out = ctx.command(command, source=source)
-    assert 'installer/operator' in out and 'provision' in out
-    assert 'docs/onboarding.md' in out and 'Nothing was changed' in out
+    assert 'operator' in out and 'setup-owner.json' in out
+    assert '`setup-owner.json`' in out and 'Nothing changed' in out
     assert 'tingle_init.py' not in out and 'python3' not in out
     assert not (home / 'hermes-tingle.json').exists()
     assert not (data / 'setup-state.json').exists()
@@ -318,7 +318,7 @@ def test_cross_chat_reply_cannot_advance_or_cancel_owner_draft(guided):
 
 def test_tool_missing_policy_never_sends_owner_to_python(guided):
     out = plugin.handle_tool(None, {'action': 'add', 'title': 'Synthetic task'})
-    assert 'installer/operator' in out and 'tingle_init.py' not in out
+    assert 'operator' in out and 'tingle_init.py' not in out
 
 
 def test_no_source_probe_or_grant_until_write_even_with_all_selected(guided, monkeypatch):
@@ -403,7 +403,7 @@ def test_invalid_policy_fragment_is_not_bootstrap_authority(guided):
     home, data, source, ctx = guided
     (home / 'hermes-tingle.json').write_text(json.dumps({'owner_principals': ['telegram:42'], 'fresh_profile': True}))
     out = ctx.command('setup', source=source)
-    assert 'installer/operator' in out and 'tingle_init.py' not in out
+    assert 'operator' in out and 'tingle_init.py' not in out
     assert not (data / 'setup-state.json').exists()
 
 
@@ -442,14 +442,14 @@ def test_bootstrap_is_consumed_so_lost_policy_cannot_reconstruct_defaults(guided
     assert (data / 'setup-consumed.json').exists()
     (home / 'hermes-tingle.json').unlink()
     out = ctx.command('setup', source=source)
-    assert 'installer/operator' in out and not (data / 'setup-state.json').exists()
+    assert 'operator' in out and not (data / 'setup-state.json').exists()
     assert not (home / 'hermes-tingle.json').exists()
 
 
 def test_owner_only_fragment_without_fresh_install_attestation_refuses(guided):
     home, data, source, ctx = guided
     (data / 'setup-owner.json').write_text(json.dumps({'owner_principals': ['telegram:42']}))
-    assert 'installer/operator' in ctx.command('setup', source=source)
+    assert 'operator' in ctx.command('setup', source=source)
     assert not (data / 'setup-state.json').exists()
 
 
@@ -483,7 +483,7 @@ def test_consumed_bootstrap_cannot_be_retried_after_failed_write(guided, monkeyp
     assert 'may already be saved' in out and 'synthetic private diagnostic' not in out
     assert (data / 'setup-consumed.json').exists()
     assert not (home / 'hermes-tingle.json').exists() and not ctx.jobs
-    assert 'installer/operator' in reply(ctx, source, 'confirm', 'WRITE')
+    assert 'operator' in reply(ctx, source, 'confirm', 'WRITE')
 
 
 def test_none_source_choice_has_no_probe_or_grant(guided, monkeypatch):

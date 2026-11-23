@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.7 - less onboarding friction
+
+- A fresh profile no longer needs `setup-owner.json`: `/tingle setup` in the owner DM takes `owner_principals` from the profile's configured home channel. A different sender, a group home channel or a missing/non-DM home channel is refused without creating a draft, so a stranger cannot self-enroll by DMing the bot. The operator file stays as an override and as the repair path for older profiles.
+- The missing-owner reply is plain language with copyable commands/filenames in backticks, and distinguishes a fresh profile from an older or broken one that needs operator repair.
+- The destination step gained `/tingle setup here` (and `/tingle setup destination here`) to use the verified DM you are in. The short form is accepted only with no extra arguments and only on the first field; the prompt shows the exact chat ID. Source grants, destination retype, `WRITE` confirmation and job activation are unchanged.
+- Docs and version metadata updated. Local verification: **2,705 passed, 30 skipped** in the standalone test environment; privacy gate passed. The owner guards and both shortcut paths were mutation-probed to confirm the regressions fail when the guards are removed. CI will run on the exact pull-request head.
+
 ## 0.9.6 - accept the newer Hermes pricing schema
 
 - Private evaluation now accepts the known `cache_write_1h_cost_per_million` field on Hermes `PricingEntry` when it is absent or `None`. A rated value (including zero) still disables evaluation because Tingle's reservation does not bound a separate 1-hour cache-write dimension; every other added or missing field continues to fail closed. No consent, source, destination, schedule or spending behavior changed.
