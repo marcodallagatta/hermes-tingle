@@ -54,67 +54,84 @@ def _read(path):
         return stream.read()
 
 
-def _home_channel(text, platform):
-    """Read platforms.<platform>.home_channel from the small YAML subset Hermes uses.
+def _config_document(home):
+    """Parse the real profile config with Hermes's YAML policy, or fail closed."""
+    config = resources.safe(home / 'config.yaml', home)
+    try:
+        import hermes_yaml
+        document = hermes_yaml.safe_load(config.read_text())
+    except Exception:
+        return None, None
+    if not isinstance(document, dict):
+        return None, None
+    return document, config
 
-    No YAML dependency is added to the plugin: only this exact mapping is read,
-    and anything less explicit fails closed so the operator file remains the
-    fallback. Lists, inline maps and anchors are deliberately not interpreted.
-    """
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if line.strip() != 'platforms:' or line[:1] in (' ', '\t'):
-            continue
-        for position in range(index + 1, len(lines)):
-            candidate = lines[position]
-            if not candidate.strip() or candidate.lstrip().startswith('#'):
-                continue
-            indent = len(candidate) - len(candidate.lstrip())
-            if indent == 0:
-                break
-            if candidate.strip() != platform + ':':
-                continue
-            for deeper in range(position + 1, len(lines)):
-                row = lines[deeper]
-                if not row.strip() or row.lstrip().startswith('#'):
-                    continue
-                row_indent = len(row) - len(row.lstrip())
-                if row_indent <= indent:
-                    break
-                if row.strip() != 'home_channel:':
-                    continue
-                values = {}
-                for field_row in lines[deeper + 1:]:
-                    if not field_row.strip() or field_row.lstrip().startswith('#'):
-                        continue
-                    field_indent = len(field_row) - len(field_row.lstrip())
-                    if field_indent <= row_indent:
-                        break
-                    key, _, raw = field_row.strip().partition(':')
-                    if key in ('platform', 'user_id', 'chat_id'):
-                        values[key] = raw.strip().strip('"\'')
-                return values
-    return None
+
+def _prior_tingle_state(home):
+    """Distinguish an old install from admitted-chat metadata in a new DB."""
+    if (home / 'hermes-tingle.json').exists() or list(home.glob('.tingle-policy-backup-*')):
+        return True
+    if (home / '.tingle-resources.json').exists() or (home / '.tingle-removal-recovery').exists():
+        return True
+    for namespace in ('hermes-tingle-lookback', 'hermes-tingle-body-audit'):
+        root = home / 'plugin-data' / namespace
+        try:
+            if root.exists() and any(root.iterdir()):
+                return True
+        except OSError:
+            return True
+    db = home / 'plugin-data' / 'hermes-tingle' / 'data.db'
+    if not db.exists():
+        return False
+    try:
+        import sqlite3
+        conn = sqlite3.connect(f'file:{db}?mode=ro', uri=True, timeout=0)
+        try:
+            tables = {row[0] for row in conn.execute("select name from sqlite_master where type='table'")}
+            checks = (
+                ('hermes_tingle_items', ''),
+                ('hermes_tingle_source_optins', "where enabled=1 or generation>0 or enabled_at is not null or note != ''"),
+                ('chat_source_consents', ''),
+                ('onboarding_item_journal', ''),
+                ('hermes_tingle_steps', ''),
+            )
+            for table, clause in checks:
+                if table in tables and conn.execute(f'select 1 from {table} {clause} limit 1').fetchone():
+                    return True
+        finally:
+            conn.close()
+    except Exception:
+        return True
+    return False
 
 
 def _profile_owner(home, binding):
-    """Fresh-profile owner from the configured home channel, never from a stranger DM."""
+    """Fresh-profile owner from the configured Telegram home channel, never from a stranger DM."""
     platform, user, _chat, _thread = binding
-    config = resources.safe(home / 'config.yaml', home)
-    try:
-        channel = _home_channel(config.read_text(), platform)
-    except (OSError, UnicodeError, ValueError):
+    # Other gateways have no verified home-channel DM predicate here.
+    if platform != 'telegram':
         return None
-    if not channel or str(channel.get('platform', '')).casefold() != platform:
+    document, config = _config_document(home)
+    if document is None:
+        return None
+    platforms = document.get('platforms')
+    if not isinstance(platforms, dict):
+        return None
+    entry = platforms.get(platform)
+    if not isinstance(entry, dict):
+        return None
+    channel = entry.get('home_channel')
+    if not isinstance(channel, dict):
+        return None
+    if str(channel.get('platform', '')).casefold() != platform:
         return None
     owner_user = str(channel.get('user_id', '') or '').strip()
     owner_chat = str(channel.get('chat_id', '') or '').strip()
     if not owner_user or not owner_chat or owner_user.casefold() != user.casefold():
         return None
-    if platform == 'telegram':
-        # DM chat IDs are positive and match the sender; groups are never owners.
-        if not re.fullmatch(r'\d+', owner_chat) or owner_chat != owner_user:
-            return None
+    # Telegram DM chat IDs are positive and match the sender; groups never own.
+    if not re.fullmatch(r'\d+', owner_chat) or owner_chat != owner_user:
+        return None
     return [f'{platform}:{owner_user}'], _identity(config)
 
 
@@ -145,6 +162,8 @@ def _authority(home, data_dir, source):
         # No operator file: a genuinely fresh profile inherits the configured
         # home-channel owner. Callers have already excluded existing policy and
         # a consumed bootstrap; nobody self-enrolls from an arbitrary DM.
+        if _prior_tingle_state(home):
+            raise ValueError(PROVISIONING)
         default = _profile_owner(home, binding)
         if default is None:
             raise ValueError(PROVISIONING)

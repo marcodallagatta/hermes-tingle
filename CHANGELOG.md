@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.9 - harden automatic owner defaulting
+
+- Fresh-profile owner lookup now parses the profile config with Hermes's own YAML policy (`hermes_yaml`), not a hand-rolled scanner. Nested mappings, duplicate keys and invalid documents fail closed instead of admitting a different owner.
+- Automatic enrollment is Telegram-only; other gateways have no verified home-channel DM predicate here and still need operator provisioning.
+- Automatic bootstrap additionally refuses when prior Tingle state remains: policy backups, resource manifest/recovery data, non-empty lookback/body-audit namespaces, tracked items, source grants or onboarding/journal records. Admitted-chat metadata in an otherwise empty database is still harmless. Those profiles need operator repair, not reconstructed defaults.
+- Test harness mirrors Hermes's duplicate-key-rejecting YAML policy via an isolated PyYAML stub; `requirements-dev.txt` now pins PyYAML. Docs updated.
+- Local verification: **2,715 passed, 30 skipped** in the standalone test environment; privacy gate passed. All three independent-review findings were reproduced as failing regressions before the fix. CI will run on the exact pull-request head.
+
 ## 0.9.8 - removal without stopping the gateway
 
 - The local remover no longer refuses cleanup just because the profile's gateway is running. With no Tingle Cron jobs left there is no scheduled Tingle writer; the process screen skips only the exact gateway PID reported for that profile, and other Hermes/Tingle processes still block removal.

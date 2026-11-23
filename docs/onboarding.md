@@ -10,7 +10,7 @@ Draft setup does not read accounts or messages. After explicit source consent an
 
 ## Operator provisioning
 
-On a fresh profile no operator file is needed. `/tingle setup` in the owner DM takes the owner from `platforms.<platform>.home_channel` in the profile config. The home channel must be a DM and the sender must match its configured user ID; a group home channel or a different sender is refused without creating a draft. A stranger cannot enroll themselves by DMing the bot.
+On a fresh Telegram profile no operator file is needed. `/tingle setup` in the owner DM takes the owner from `platforms.telegram.home_channel` in the profile config. The home channel must be a positive Telegram user/chat ID (a DM) and the sender must match its configured user ID; a group home channel, a different sender, a non-Telegram platform or a malformed/ambiguous config is refused without creating a draft. A stranger cannot enroll themselves by DMing the bot. Automatic bootstrap is also refused when the profile still has prior Tingle policy backups, a resource manifest, source grants, tracked items or other non-empty Tingle namespaces: that is an older install needing operator repair, not a fresh default. Admitted-chat metadata in an otherwise empty database is harmless.
 
 The operator file below is for older profiles, a non-DM home channel, or a deliberate owner change. It remains an installer/admin action, **not an owner chat-enrollment step**. No caller, first message, button or typed reply creates an owner.
 
