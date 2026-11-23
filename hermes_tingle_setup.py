@@ -125,9 +125,14 @@ def _prior_tingle_state(home):
                         or not isinstance(job.get('name'), str)
                         or not isinstance(job.get('script'), (str, type(None)))):
                     return True
-                toolsets = job.get('enabled_toolsets', job.get('toolsets', []))
-                if not isinstance(toolsets, list):
-                    return True
+                toolsets = []
+                for key in ('enabled_toolsets', 'toolsets'):
+                    configured = job.get(key)
+                    if configured is None:
+                        continue
+                    if not isinstance(configured, list) or any(not isinstance(value, str) for value in configured):
+                        return True
+                    toolsets.extend(configured)
                 if ('tingle' in job['name'].casefold()
                         or Path(str(job.get('script') or '')).name in
                         ('hermes_tingle_snapshot.py', 'hermes_tingle_due.py')
