@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.11 - distinguish wizard state from prior installs
+
+- The automatic-owner freshness check now permits only the wizard's own setup draft entry in the resource manifest. Any recorded helper, created namespace or Cron job still proves prior Tingle state and requires operator repair. Added regressions for helper/job provenance and the full multi-reply setup path.
+- Local verification: **2,718 passed, 30 skipped** in the standalone test environment; privacy gate passed. CI will run on the exact pull-request head.
+
 ## 0.9.10 - keep owner-default setup usable across replies
 
 - The setup wizard's own `.tingle-resources.json` is no longer mistaken for evidence of a prior install; it is created on the first typed answer. Genuine prior state still blocks automatic defaults. Added a full-path regression through destination selection, subsequent reply, cancellation and restart.

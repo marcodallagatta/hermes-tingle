@@ -73,8 +73,24 @@ def _prior_tingle_state(home):
         return True
     if (home / '.tingle-removal-recovery').exists():
         return True
-    # The setup wizard's own .tingle-resources.json records setup-state.json on
-    # the first reply, so its existence alone is not prior install state.
+    manifest = home / resources.MANIFEST
+    if manifest.exists():
+        # The first setup reply records only its private draft. Any other
+        # created path or any recorded job proves this is not a fresh install.
+        try:
+            data = resources.read(home)
+        except Exception:
+            return True
+        wizard_paths = {
+            'plugin-data/hermes-tingle/setup-state.json',
+            'plugin-data/hermes-tingle/setup.lock',
+        }
+        files = data.get('files', {})
+        directories = data.get('directories', {})
+        if data.get('jobs') or any(path not in wizard_paths for path in files):
+            return True
+        if any(path != 'plugin-data/hermes-tingle' for path in directories):
+            return True
     for namespace in ('hermes-tingle-lookback', 'hermes-tingle-body-audit'):
         root = home / 'plugin-data' / namespace
         try:

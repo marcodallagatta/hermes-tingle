@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import hermes_tingle_resources as resources
 from test_guided_setup import guided  # noqa: F401 - shared synthetic command fixture
 
 
@@ -97,6 +98,28 @@ def test_prior_source_grant_blocks_automatic_bootstrap(guided):  # noqa: F811
         'create table hermes_tingle_source_optins (kind text, enabled integer, generation integer, note text)',
         "insert into hermes_tingle_source_optins values ('email', 0, 3, 'prior grant')",
     ])
+    out = ctx.command('setup', source=source)
+    assert 'No Tingle owner is configured' in out
+    assert not (data / 'setup-state.json').exists()
+
+
+def test_prior_manifest_helper_blocks_automatic_bootstrap(guided):  # noqa: F811
+    home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
+    helper = home / 'scripts' / 'hermes_tingle_due.py'
+    helper.parent.mkdir()
+    helper.write_text('# existing copied helper')
+    resources.record(helper, home=home)
+    out = ctx.command('setup', source=source)
+    assert 'No Tingle owner is configured' in out
+    assert not (data / 'setup-state.json').exists()
+
+
+def test_prior_manifest_job_blocks_automatic_bootstrap(guided):  # noqa: F811
+    home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
+    resources.record_job(home, {
+        'id': 'tingle-review', 'name': 'Tingle daily review',
+        'script': 'hermes_tingle_snapshot.py', 'schedule': '0 9 * * *',
+    })
     out = ctx.command('setup', source=source)
     assert 'No Tingle owner is configured' in out
     assert not (data / 'setup-state.json').exists()
