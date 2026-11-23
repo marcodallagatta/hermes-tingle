@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.4 - automatic retirement for stale follow-ups
+
+- Store a deterministic retirement class/date on new active items. Deadline items retire 7 days after due once at least three reminder attempts were reserved; waits on another actor retire after 270 inactive days; other undated work after 90 inactive days; an absolute 365-day cap applies from creation.
+- Daily review backfills missing dates for legacy active items after collecting current evidence. Distinct item-specific source evidence defers soft retirement once so the agent can interpret it; unchanged evidence cannot extend retirement on later reviews, and the one-year cap still wins.
+- Meaningful edits, snoozes and structured progress reset inactivity; reminder reservations, schedule checks and routine audits do not.
+- Auto-closed items leave active reports, remain inspectable as `auto_closed`, and are distinct from done/dismissed. No rows are hard-deleted. The 30-minute nudge job, source scope, schedule and destination are unchanged.
+- The first ordinary daily review after upgrade will perform legacy backfill; no manual source/model scan or reminder send is needed.
+- Full local suite on the final code: **2,655 passed, 30 skipped, 243 deprecation warnings** (Python 3.14.9). Pinned Hermes runtime/admission checks will run on the pull request head.
+
 ## 0.9.3 - quiet unconfirmed-batch reminders
 
 - Removed the scheduled unconfirmed-batch diagnostic from the script-only nudge output. Reminder attempts, stored cadence, the four-attempt cycle cap, batch history and `/tingle delivery` inspection remain unchanged.

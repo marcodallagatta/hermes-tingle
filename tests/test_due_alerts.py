@@ -580,8 +580,8 @@ def test_v2_goal_shows_linked_wait_as_wait_without_send_instruction():
 def test_v2_linked_snoozed_wait_is_not_exposed():
     import hermes_tingle_store as store
     import hermes_tingle_sources as sources
-    goal = store.add_item(title='Project', source_type='manual', next_check_at='2020-01-02T00:00:00+00:00', now='2020-01-01T00:00:00+00:00')
-    wait = store.add_item(title='Private wait', source_type='email', source_ref='gmail:synthetic#sent', status='waiting', owner='other', completion_signal='source_email_reply_received', next_check_at='2020-01-02T00:00:00+00:00', now='2020-01-01T00:00:00+00:00')
+    goal = store.add_item(title='Project', source_type='manual', next_check_at='2020-01-02T00:00:00+00:00', now='2025-12-01T00:00:00+00:00')
+    wait = store.add_item(title='Private wait', source_type='email', source_ref='gmail:synthetic#sent', status='waiting', owner='other', completion_signal='source_email_reply_received', next_check_at='2020-01-02T00:00:00+00:00', now='2025-12-01T00:00:00+00:00')
     store.add_step(goal['id'], title='Private wait', why='Need response', wait_item_id=wait['id'])
     store.snooze_item(wait['id'], until='2099-01-01T00:00:00+00:00', now='2026-01-01T00:00:00+00:00')
     output = render_due_alerts(sources.all_due_items(now=datetime(2026, 1, 1, tzinfo=timezone.utc)), get_item=store.get_item)

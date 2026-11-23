@@ -145,7 +145,7 @@ HERMES_TINGLE = {
             "date": {"type": "string", "description": "Local calendar date YYYY-MM-DD in the configured timezone for check_calendar_availability; the action is limited to the next 7 days."},
             "candidate_starts": {"type": "array", "items": {"type": "string", "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"}, "maxItems": 10, "description": "Candidate local start times HH:MM in the configured timezone; use the times explicitly offered. Ambiguous or nonexistent DST times are rejected."},
             "duration_minutes": {"type": "integer", "minimum": 5, "maximum": 180, "default": 30, "description": "Call duration for check_calendar_availability; use 30 if the thread does not specify."},
-            "list_status": {"type": "string", "enum": ["active", "all", "open", "waiting", "blocked", "done", "dismissed", "missed"], "description": "List filter; defaults to active."},
+            "list_status": {"type": "string", "enum": ["active", "all", "open", "waiting", "blocked", "done", "dismissed", "missed", "auto_closed"], "description": "List filter; defaults to active."},
         },
         "required": ["action"],
     },

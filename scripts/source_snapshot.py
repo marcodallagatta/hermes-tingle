@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -70,8 +71,13 @@ def main(*, metrics: bool = False) -> int:
     from hermes_tingle_config import local_timezone
 
     wire_from_runtime()
-    profile_timezone = local_timezone().key
-    snapshot = collect_snapshot(discovery_enabled=True)
+    try:
+        profile_timezone = local_timezone().key
+    except ValueError:
+        # Invalid profile settings block source reads; still emit the bounded
+        # configuration error rather than failing before the collector reports it.
+        profile_timezone = None
+    snapshot = collect_snapshot(now=datetime.now(timezone.utc), discovery_enabled=True)
     try:
         from hermes_tingle_discovery_assess import evaluate
         evaluate(snapshot)
