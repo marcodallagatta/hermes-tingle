@@ -1,6 +1,6 @@
 # First run and local repair
 
-Owners set up Tingle in chat, not by running a Python script. An installer/operator first provisions the owner principal once for the intended profile. Local file-write access remains trusted: anyone running as the Hermes OS user can change plugin policy. Do not share that OS account with an untrusted person.
+Owners set up Tingle in chat, not by running a Python script. On a fresh Telegram profile the owner principal is taken from the profile's configured home channel during `/tingle setup`; older profiles, a non-DM home channel or a deliberate owner change need one operator provisioning step. Local file-write access remains trusted: anyone running as the Hermes OS user can change plugin policy. Do not share that OS account with an untrusted person.
 
 ## Before choosing accounts or reminders
 

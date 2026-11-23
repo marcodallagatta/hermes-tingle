@@ -2,6 +2,7 @@
 
 ## 0.9.13 - finish auto-owner setup activation
 
+- Install and setup docs now describe the supported one-step enabled install and fresh-profile owner defaulting from the Telegram home channel. Operator provisioning is documented only for older profiles, a non-DM home channel or a deliberate owner change; `--no-enable` is reserved for inspecting unreviewed candidates.
 - The immediate job-activation consent after `WRITE` now revalidates an auto-defaulted owner against the unchanged Telegram home-channel config rather than treating the just-saved policy/consumed marker as evidence of an old install. A changed config or sender still fails closed. Added a composed regression that reaches the job-consent question and schedules both jobs in the synthetic profile.
 - Local verification: **2,722 passed, 30 skipped** in the standalone test environment; privacy gate passed. CI will run on the exact pull-request head.
 
