@@ -41,7 +41,7 @@ For natural-language or other model-driven Tingle actions, the active profile mu
 hermes -p <profile> tools enable --platform telegram hermes_tingle
 ```
 
-Omit `-p <profile>` for the default profile; replace `telegram` with the target platform. This changes only that profile/platform and takes effect in a fresh session or after `/reset`. A saved platform list may intentionally omit a known plugin toolset, so Tingle does not enable itself or override that choice automatically. Never edit `config.yaml` by hand.
+Use `-p default` to target the default profile explicitly; omitting `-p` can select a sticky active profile instead. Replace `telegram` with the target platform. The change takes effect in a fresh session or after `/reset`, but it is not strictly limited to that platform: Hermes may also clear a matching entry from the profile-wide `agent.disabled_toolsets` list, which can enable the toolset on other platforms whose saved lists already include it, and enabling the plugin through the plugin manager can add `hermes_tingle` to every saved platform toolset list for that profile. A saved platform list may intentionally omit a known plugin toolset, so Tingle does not enable itself or override that choice automatically; these Hermes enable paths change saved lists only when you explicitly enable the tool or plugin. Review the saved lists afterwards if you rely on a per-platform opt-out. Never edit `config.yaml` by hand.
 
 ## Updating an existing installation
 
