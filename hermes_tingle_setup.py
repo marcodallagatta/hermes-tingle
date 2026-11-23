@@ -67,6 +67,34 @@ def _config_document(home):
     return document, config
 
 
+def _no_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate manifest key')
+        result[key] = value
+    return result
+
+
+def _strict_manifest(home):
+    """Reject duplicate keys and malformed entries before trusting provenance."""
+    path = resources.safe(home / resources.MANIFEST, home)
+    data = json.loads(path.read_text(), object_pairs_hook=_no_duplicate_keys)
+    if (not isinstance(data, dict) or data.get('version') != 1
+            or data.get('home') != str(Path(home).resolve(strict=True))
+            or any(not isinstance(data.get(k), dict) for k in ('files', 'directories', 'jobs'))):
+        raise ValueError('invalid manifest')
+    for group in ('files', 'directories'):
+        for value in data[group].values():
+            if (not isinstance(value, dict) or value.get('origin') != 'created'
+                    or not isinstance(value.get('device'), int) or not isinstance(value.get('inode'), int)):
+                raise ValueError('invalid manifest provenance')
+    for value in data['jobs'].values():
+        if not isinstance(value, dict) or not isinstance(value.get('definition'), dict):
+            raise ValueError('invalid manifest job provenance')
+    return data
+
+
 def _prior_tingle_state(home):
     """Distinguish an old install from admitted-chat metadata in a new DB."""
     if (home / 'hermes-tingle.json').exists() or list(home.glob('.tingle-policy-backup-*')):
@@ -78,7 +106,7 @@ def _prior_tingle_state(home):
         # The first setup reply records only its private draft. Any other
         # created path or any recorded job proves this is not a fresh install.
         try:
-            data = resources.read(home)
+            data = _strict_manifest(home)
         except Exception:
             return True
         wizard_paths = {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.12 - validate setup provenance manifests strictly
+
+- Automatic-owner freshness checking now rejects duplicate JSON keys and malformed manifest records instead of trusting permissive `json.loads`/the general resource reader. The setup wizard's own draft entry remains exempt, while any prior helper/job record blocks defaults. Added regressions for duplicate `files`/`jobs` keys and invalid draft entries.
+- Local verification: **2,721 passed, 30 skipped** in the standalone test environment; privacy gate passed. CI will run on the exact pull-request head.
+
 ## 0.9.11 - distinguish wizard state from prior installs
 
 - The automatic-owner freshness check now permits only the wizard's own setup draft entry in the resource manifest. Any recorded helper, created namespace or Cron job still proves prior Tingle state and requires operator repair. Added regressions for helper/job provenance and the full multi-reply setup path.

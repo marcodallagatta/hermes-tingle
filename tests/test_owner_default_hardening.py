@@ -103,6 +103,43 @@ def test_prior_source_grant_blocks_automatic_bootstrap(guided):  # noqa: F811
     assert not (data / 'setup-state.json').exists()
 
 
+def _write_manifest(home, text):
+    (home / '.tingle-resources.json').write_text(text)
+
+
+def test_duplicate_manifest_key_hiding_a_helper_blocks_bootstrap(guided):  # noqa: F811
+    home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
+    text = ('{"version":1,"home":' + json.dumps(str(home.resolve()))
+            + ',"files":{"scripts/hermes_tingle_due.py":{"origin":"created","device":1,"inode":2}},'
+            + '"files":{},"directories":{},"jobs":{}}')
+    _write_manifest(home, text)
+    out = ctx.command('setup', source=source)
+    assert 'No Tingle owner is configured' in out
+    assert not (data / 'setup-state.json').exists()
+
+
+def test_duplicate_manifest_key_hiding_a_job_blocks_bootstrap(guided):  # noqa: F811
+    home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
+    text = ('{"version":1,"home":' + json.dumps(str(home.resolve()))
+            + ',"files":{},"directories":{},'
+            + '"jobs":{"review":{"origin":"created","definition":{}}},"jobs":{}}')
+    _write_manifest(home, text)
+    out = ctx.command('setup', source=source)
+    assert 'No Tingle owner is configured' in out
+    assert not (data / 'setup-state.json').exists()
+
+
+def test_null_draft_entry_in_manifest_blocks_bootstrap(guided):  # noqa: F811
+    home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
+    text = ('{"version":1,"home":' + json.dumps(str(home.resolve()))
+            + ',"files":{"plugin-data/hermes-tingle/setup-state.json":null},'
+            + '"directories":{},"jobs":{}}')
+    _write_manifest(home, text)
+    out = ctx.command('setup', source=source)
+    assert 'No Tingle owner is configured' in out
+    assert not (data / 'setup-state.json').exists()
+
+
 def test_prior_manifest_helper_blocks_automatic_bootstrap(guided):  # noqa: F811
     home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
     helper = home / 'scripts' / 'hermes_tingle_due.py'
