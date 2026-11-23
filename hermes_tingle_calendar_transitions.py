@@ -32,7 +32,7 @@ INSTRUCTIONS = (
     'and one concise next step. Suppress a warning when grounded context removes the risk. '
     'If coverage_complete is false, acknowledge the relevant limit and never claim every transition is safe '
     'or all calendar conflicts were checked. Candidate bounds can omit pairs. '
-    'Do not repeat an unchanged warning already present in the attached session unless the risk or useful next step changed. '
+    "Each unreported pair may carry an opaque transition_receipt and source_generation. If you decide the pair presents a material warning, call hermes_tingle(action=\"mark_calendar_transition_alerted\", transition_receipt=<exact receipt>, source_generation=<exact generation>) once before including that warning. This records an alert attempt, not verified delivery. If the tool reports already_alerted, omit the unchanged warning. Previously attempted unchanged pairs are filtered from later snapshots; changed event versions get a fresh receipt. If no receipt is present, do not call the action. Receipt tokens and suppression/count fields are internal only; never include them in the user-facing report. "
     'Transition advice alone never authorizes adding Tingle items; that requires separate owner consent. '
     'Tingle does not create or move Calendar events or message other people. '
     'If transition evidence is the only possible finding and no material risk survives checking, remain silent. '

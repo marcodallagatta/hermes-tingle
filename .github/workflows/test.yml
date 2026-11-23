@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
@@ -42,7 +42,7 @@ jobs:
       HERMES_PIN: ${{ matrix.hermes_commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       # Hermes must live OUTSIDE the plugin directory: the admission validator's
       # security scan walks the plugin tree, and a nested checkout gets scanned
       # (and flagged) as if it were plugin code.
@@ -51,4 +51,15 @@ jobs:
           git -C "$RUNNER_TEMP/hermes-agent" checkout "$HERMES_PIN"
       - run: uv sync --directory "$RUNNER_TEMP/hermes-agent"
       - run: uv pip install --python "$RUNNER_TEMP/hermes-agent/.venv/bin/python" pytest
-      - run: HERMES_PRICING_SOURCE="$RUNNER_TEMP/hermes-agent/agent/usage_pricing.py" PYTHONPATH="$RUNNER_TEMP/hermes-agent" "$RUNNER_TEMP/hermes-agent/.venv/bin/python" -m pytest tests/ -q
+      # Required imports in runtime-dependent tests must fail, not silently skip.
+      - run: HERMES_REQUIRE_RUNTIME=1 HERMES_PRICING_SOURCE="$RUNNER_TEMP/hermes-agent/agent/usage_pricing.py" PYTHONPATH="$RUNNER_TEMP/hermes-agent" "$RUNNER_TEMP/hermes-agent/.venv/bin/python" -m pytest tests/ -q
+      - name: Run native removal smoke (DELETE and KEEP)
+        env:
+          HOME: ${{ runner.temp }}/tingle-smoke-home
+          HERMES_HOME: ${{ runner.temp }}/tingle-smoke-home
+          TMPDIR: ${{ runner.temp }}/tingle-smoke-tmp
+          PYTHONPATH: ${{ github.workspace }}:${{ runner.temp }}/hermes-agent
+        run: |
+          mkdir -m 700 -p "$HOME" "$TMPDIR"
+          "$RUNNER_TEMP/hermes-agent/.venv/bin/python" tests/native_removal_smoke.py
+          "$RUNNER_TEMP/hermes-agent/.venv/bin/python" tests/native_removal_smoke.py --keep-data

@@ -557,7 +557,7 @@ def test_snapshot_filters_reviewed_sources_and_includes_due_loops(monkeypatch):
     assert [item["source_id"] for item in snapshot["emails"]] == ["new"]
     assert [item["source_id"] for item in snapshot["calendar_events"]] == ["club-id:event-1"]
     assert snapshot["due_items"] == [{"id": "HT-ABC123"}]
-    assert snapshot["email_sync"] == {"sync_mode": "history", "pending_count": 0, "emails": emails, "errors": []}
+    assert snapshot["email_sync"] == {"enabled": True, "sync_mode": "history", "pending_count": 0, "emails": emails, "errors": []}
     assert snapshot["approved_feedback_rules"] == approved_rules
 
 

@@ -6,10 +6,10 @@ Tingle is a public pre-1.0 beta. No catalog name or release is promised. These s
 
 Install the latest published revision, or pass an explicit reviewed commit for a reproducible pin. The plugin manager enforces the Hermes compatibility floor declared in `plugin.yaml`, but that floor does not guarantee private API seams remain stable; the current validator flags private Hermes-core imports that may break on any runtime release. Python 3.11–3.14 must satisfy the chosen Hermes runtime. Linux is the tested platform; other OSes and gateway versions are not independently accepted.
 
-The current static plugin audit reports isolation `in_process` and `host_ready: false` because the removal runtime patches private Cron lock-state attributes. This is a static code-path classification, not proof of what a host-isolated runtime actually executes; runtime isolation behavior remains unverified.
+The remover's Cron inventory is read-only and does not patch Hermes Cron state; it refuses Tingle cleanup until every listed job is removed manually through Hermes after writers stop. The pinned-runtime CI checks exercise PluginManager registration and a tool call under both `host` and `in_process` isolation. See [uninstall](uninstall.md) for the manual Cron step and its limits.
 
 
-For a no-account rehearsal, use a new disposable HOME and HERMES_HOME outside the source tree. Keep real profiles, credentials, Google connections and gateway routes unavailable. Run the [automated checks](release-process.md#automated-evidence) first. Doctor registers a staged copy in an isolated home; this is not a full installer or live gateway test.
+For a maintainer-only no-account rehearsal, use a new disposable HOME and HERMES_HOME outside the source tree. Keep real profiles, credentials, Google connections and gateway routes unavailable. Run the synthetic tests and privacy check described in [contributor development guidance](../CONTRIBUTING.md#development) first. Doctor registers a staged copy in an isolated home; this is not a full installer or live gateway test.
 
 ## Reviewed custom-source installation
 
@@ -34,6 +34,8 @@ Installing/enabling alone schedules no Tingle jobs or source reads. For a fresh 
 ## Updating an existing installation
 
 Update through the Hermes plugin manager, for example `hermes -p <profile> plugins update hermes-tingle`, or reinstall an exact reviewed commit with `hermes -p <profile> plugins install https://github.com/marcodallagatta/hermes-tingle.git --ref <full-commit> --force`, then verify in a DM that `/tingle` answers. Do not hand-checkout the installed plugin tree with raw git: the running gateway keeps its stale slash-command registry (`Unknown command /tingle`) until a restart, because only the manager's reload step refreshes it. Verify the exact verbs on the selected runtime with `hermes plugins --help`. If replies are stale after an update, have an operator restart the gateway from a separate terminal (`hermes gateway restart`) and start a new session before using `/tingle`: a manager reload can leave the long-running plugin host on the old Python tool code, so replies may still show the previous version. Check the version your replies report. An update changes no policy, jobs, source grants or destinations by itself.
+
+v0.9.4 adds automatic retirement for stale active items. The additive schema migration runs on store open; existing active items receive missing retirement fields during the next ordinary `Tingle daily review`, after that review collects sources. Do not manually run the live review just to backfill or smoke-test. The 30-minute script-only nudge helper and its schedule/destination are unchanged. Auto-closed rows remain in history and are not physically purged.
 
 ## Starting real operation is a separate step
 

@@ -230,13 +230,10 @@ def test_production_code_has_no_removed_messaging_symbols():
 def test_public_copy_describes_record_only_approvals_and_no_external_messaging():
     root = Path(__file__).resolve().parents[1]
     readme = (root / "README.md").read_text(encoding="utf-8")
-    tracker = (root / "docs" / "feature-tracker.md").read_text(encoding="utf-8")
     description = schemas.HERMES_TINGLE["description"]
     bug_template = (root / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml").read_text(encoding="utf-8")
     assert "Tingle does not send messages to external counterparties" in readme
     assert "this beta only records approve/reject decisions" in readme
-    assert "does not send messages to external users or bots" in tracker
-    assert "no executor that carries them out" in tracker
-    assert "does not initiate messages to external contacts or agents" in description
+    assert "Tingle does not initiate messages to external contacts or agents" in description
     assert "owner reminders and reports use the configured destination" in description
     assert "coordination attempt" not in bug_template

@@ -2108,13 +2108,108 @@ def _case_item_excluded(item):
     return _excluded_work(item)
 
 
+def _retirement_evidence(snapshot: dict[str, Any]) -> tuple[set[str], dict[str, str]]:
+    """Content-free per-item evidence keys; a repeated unchanged signal keeps its key."""
+    grouped: dict[str, list[str]] = {}
+
+    def add(item_id: Any, *parts: Any) -> None:
+        if not isinstance(item_id, str) or not re.fullmatch(r"(?:HT|OL)-[A-F0-9]{6}", item_id):
+            return
+        token = "|".join(str(part)[:128] for part in parts if part not in (None, ""))
+        if token:
+            grouped.setdefault(item_id.upper(), []).append(token)
+
+    for row in snapshot.get("tracked_email_context", []) or []:
+        if isinstance(row, dict):
+            add(row.get("item_id"), "email-context",
+                *(message.get("source_id") for message in row.get("messages", []) if isinstance(message, dict)))
+    for row in snapshot.get("email_completion_signals", []) or []:
+        if isinstance(row, dict):
+            add(row.get("item_id"), "email-completion", row.get("state", ""))
+    for row in snapshot.get("email_reply_checks", []) or []:
+        if isinstance(row, dict) and row.get("state") != "no_reply":
+            reply = row.get("reply") or {}
+            add(row.get("item_id"), "reply", row.get("state", ""), reply.get("source_id", ""))
+    for row in snapshot.get("email_checkpoint_checks", []) or []:
+        if isinstance(row, dict) and row.get("state") != "no_thread_update":
+            message_keys = []
+            for message in row.get("messages", []) or []:
+                if isinstance(message, dict):
+                    message_keys.append("/".join(str(message.get(key, ""))[:128]
+                                                  for key in ("source_id", "date", "direction")))
+            add(row.get("item_id"), "checkpoint", row.get("state", ""), *sorted(message_keys))
+    chat_review = snapshot.get("chat_review")
+    if isinstance(chat_review, dict):
+        for row in chat_review.get("matches", []) or []:
+            if isinstance(row, dict):
+                for item_id in row.get("item_ids", []) or []:
+                    add(item_id, "chat", row.get("chat_ref", ""), row.get("role", ""),
+                        row.get("timestamp", ""))
+    keys = {
+        item_id: hashlib.sha256("|".join(sorted(parts)).encode()).hexdigest()[:64]
+        for item_id, parts in grouped.items()
+    }
+    return set(keys), keys
+
+
+def _filter_retired_from_snapshot(snapshot: dict[str, Any], retired_ids: set[str]) -> None:
+    """Remove just-retired items from same-run evidence before the agent sees it."""
+    def strip_rows(value: Any) -> Any:
+        if isinstance(value, dict):
+            if (str(value.get("id", "")).upper() in retired_ids
+                    or str(value.get("item_id", "")).upper() in retired_ids):
+                return None
+            cleaned = {key: strip_rows(item) for key, item in value.items()}
+            return {key: item for key, item in cleaned.items() if item is not None}
+        if isinstance(value, list):
+            return [item for item in (strip_rows(row) for row in value) if item is not None]
+        return value
+
+    for key in ("due_items", "tracked_email_context", "email_completion_signals",
+                "email_reply_checks", "email_checkpoint_checks", "case_merge_context"):
+        if key in snapshot:
+            snapshot[key] = strip_rows(snapshot[key])
+    chat_review = snapshot.get("chat_review")
+    if isinstance(chat_review, dict) and isinstance(chat_review.get("matches"), list):
+        # The context-review receipt binds the whole item-id scope. Dropping one
+        # ID would mismatch both the displayed scope and the stored receipt.
+        chat_review["matches"] = [
+            row for row in chat_review["matches"]
+            if not isinstance(row, dict)
+            or not any(str(item_id).upper() in retired_ids
+                       for item_id in (row.get("item_ids") or []))
+        ]
+
+
+def _source_reviews_complete(snapshot: dict[str, Any]) -> bool:
+    """Soft retirement is safe only when enabled sources completed this review."""
+    if snapshot.get("errors"):
+        return False
+    for key in ("email_sync", "chat_review", "calendar_review"):
+        review = snapshot.get(key)
+        if isinstance(review, dict) and review.get("enabled") is True:
+            if review.get("review_complete") is not True:
+                return False
+    return True
+
+
+def _apply_retirement(snapshot: dict[str, Any], *, now: datetime,
+                      source_epoch: dict[str, int | None] | None = None) -> None:
+    evidence_ids, evidence_keys = _retirement_evidence(snapshot)
+    retired_ids = set(store.auto_close_stale_items(
+        now=now, protected_ids=evidence_ids, protected_evidence=evidence_keys,
+        allow_soft_close=_source_reviews_complete(snapshot), source_epoch=source_epoch))
+    if retired_ids:
+        _filter_retired_from_snapshot(snapshot, retired_ids)
+
+
 def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, upcoming_days: int = 7,
                      discovery_enabled: bool = False) -> dict[str, Any]:
     """Read only new/unreviewed candidates and due loops; never persists source bodies."""
     try:
-        load_settings()
+        snapshot_settings = load_settings()
     except ValueError:
-        return {
+        snapshot = {
             "email_sync": {"sync_mode": "unavailable", "pending_count": None},
             "due_items": [], "emails": [], "tracked_email_context": [],
             "email_completion_signals": [], "email_reply_checks": [],
@@ -2122,6 +2217,21 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
             "errors": ["Gmail and Calendar: profile configuration is missing or invalid; no sources were checked."],
             "untrusted_source_data": True,
         }
+        # Only the daily review owns retirement. Model-triggered scan_sources
+        # with invalid config must not backfill or enforce the hard cap.
+        if discovery_enabled:
+            try:
+                # The hard cap is source-independent. Backfill dates and enforce
+                # only the one-year limit without reading sources or soft-closing.
+                store.auto_close_stale_items(
+                    now=now or datetime.now(timezone.utc), allow_soft_close=False)
+            except Exception:
+                snapshot["errors"].append("Local tracker retirement state could not be updated.")
+        return snapshot
+    snapshot_policy_key = store.source_policy_key(snapshot_settings)
+    # Capture the grant epoch before any source read. The sweep fences evidence
+    # writes against this snapshot so a mid-review revoke/purge cannot be undone.
+    collection_epoch = store.source_epoch_snapshot()
     now = now or datetime.now(timezone.utc)
     lookback_days = max(1, min(int(lookback_days), 30))
     upcoming_days = max(1, min(int(upcoming_days), 30))
@@ -2159,12 +2269,14 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
         else:
             _clear_notice(key)
     email_enabled = store.source_enabled("email")
+    email_sync["enabled"] = email_enabled
     email_cap = store.source_lookback_cap("email")
     if email_cap is not None:
         lookback_days = min(lookback_days, email_cap)
     if email_enabled:
         try:
             email_sync = _collect_email_candidates(now=now, lookback_days=lookback_days)
+            email_sync["enabled"] = True
             scanned_emails = email_sync["emails"]
             emails = scanned_emails
             errors.extend(email_sync["errors"])
@@ -2186,6 +2298,7 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
                       "review_complete": False, "incomplete_reasons": ["disabled"]}
 
     calendar_enabled = store.source_enabled("calendar")
+    calendar_generation = store.source_generation("calendar") if calendar_enabled else None
     calendar_kinds: set[str] = set()
     calendar_review: dict[str, Any] = {"enabled": calendar_enabled, "review_complete": True, "incomplete_reasons": []}
     if not calendar_enabled:
@@ -2193,6 +2306,8 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
         calendar_review["review_complete"] = False
         calendar_review["incomplete_reasons"] = ["disabled"]
     try:
+        if calendar_enabled and type(calendar_generation) is not int:
+            raise SourceReadError("Calendar grant generation unavailable; no event candidates accepted")
         try:
             workstream_exclusions = {value.strip().casefold() for value in load_settings()["workstream_exclude_values"]} if calendar_enabled else set()
         except ValueError as exc:
@@ -2211,7 +2326,7 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
                 items = _read_calendar_events(calendar, now, upcoming_days)
                 context = getattr(items, 'transition_context', items)
                 remaining = max(0, MAX_EVENTS - len(calendar_context))
-                calendar_context.extend(dict(item, source_generation=store.source_generation('calendar'))
+                calendar_context.extend(dict(item, source_generation=calendar_generation)
                                         for item in context[:remaining])
                 if len(context) > remaining or getattr(items, 'transition_context_incomplete', False):
                     calendar_context_incomplete = True
@@ -2221,7 +2336,7 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
                 for item in items:
                     if store.source_reviewed("calendar", item["source_id"], item["source_version"]):
                         continue
-                    item["source_generation"] = store.source_generation("calendar")
+                    item["source_generation"] = calendar_generation
                     events.append(item)
                     if len(events) >= MAX_EVENTS:
                         break
@@ -2308,6 +2423,18 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
         due_items=len(loops), errors=len(errors), checkpoint_checks=len(email_checkpoint_checks),
         reply_checks=len(email_reply_checks), case_items=min(len(active_items), 12),
         chat_matches=len(chat_review.get('matches') or [])))
+    calendar_transition_snapshot = calendar_transitions.build(
+        calendar_context, now=now, timezone_name=load_settings()['timezone'],
+        coverage_complete=calendar_review['review_complete'] and not calendar_context_incomplete)
+    if calendar_enabled and calendar_generation is not None:
+        calendar_transition_snapshot.update(store.prepare_calendar_transition_pairs(
+            calendar_transition_snapshot['events'], calendar_transition_snapshot['pairs'],
+            source_generation=calendar_generation, expected_policy_key=snapshot_policy_key, now=now))
+    else:
+        calendar_transition_snapshot.update({
+            'suppressed_pair_count': 0,
+            'untracked_pair_count': len(calendar_transition_snapshot['pairs']) if calendar_enabled else 0,
+        })
     snapshot = {
         "generated_at": now.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "lookback_days": lookback_days,
@@ -2329,15 +2456,17 @@ def collect_snapshot(*, now: datetime | None = None, lookback_days: int = 14, up
         "calendar_events": events,
         "calendar_names": [c["summary"] for c in calendars],
         "calendar_review": calendar_review,
-        "calendar_transitions": calendar_transitions.build(
-            calendar_context, now=now, timezone_name=load_settings()['timezone'],
-            coverage_complete=calendar_review['review_complete'] and not calendar_context_incomplete),
+        "calendar_transitions": calendar_transition_snapshot,
         "chat_review": chat_review,
         "errors": errors,
         "diagnostics": diagnostics,
         "approved_feedback_rules": store.approved_feedback_rules(),
         "untrusted_source_data": True,
     }
+    # The daily copied helper enables discovery. Model-triggered scan_sources keeps
+    # discovery disabled, so it cannot retire items as a side effect.
+    if discovery_enabled:
+        _apply_retirement(snapshot, now=now, source_epoch=collection_epoch)
     return snapshot
 
 

@@ -434,8 +434,9 @@ def test_running_version_matches_plugin_manifest():
     match = re.search(r'^version:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?\s*$', manifest, re.M)
     assert match, "plugin.yaml carries no semantic version"
     assert hermes_tingle.VERSION == match.group(1)
-
-
+    usage_skill=(Path(__file__).resolve().parents[1]/'skills'/'usage'/'SKILL.md').read_text()
+    skill_match=re.search(r'^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$',usage_skill,re.M)
+    assert skill_match and skill_match.group(1)==match.group(1)
 def test_slash_command_does_not_echo_unparseable_due_dates(isolated_db, monkeypatch):
     monkeypatch.setattr(hermes_tingle.store, "list_items", lambda **kwargs: [
         {"id": "HT-ABC123", "status": "open", "title": "Call a colleague", "due_at": "not-a-date"}

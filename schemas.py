@@ -39,6 +39,8 @@ HERMES_TINGLE = {
         "Use check_calendar_availability only for unscheduled candidate starts; it returns time-only intervals and may mark the call's own event busy. "
         "If an existing Hermes Tingle item already covers the call agenda, keep the follow-up on that item rather than creating a duplicate. "
         "The availability check is read-only and performs no Calendar writes or email send/reply. "
+        "Mark a calendar transition alerted only after deciding to include that warning in this report; the receipt is source-bound and the result never confirms delivery. "
+        "An unchanged event-pair/version is suppressed after its alert attempt; changed event versions are reviewed separately. "
         "When a direct user correction implies reusable plugin behavior, capture a pending feedback candidate only from a direct user correction; never store raw report/source content. "
         "The model never approves or dismisses a candidate: only the user's explicit /tingle rule approve|dismiss command decides; surface the candidate ID for that. Approved rules stay scoped to this plugin; do not auto-edit global skills or Hindsight. "
         "propose_lead_edit (lead_id, title, optional summary and due_at) only saves a draft for an email look-back lead after the OWNER asks in chat to track it with their changes; it adds nothing and each call replaces the previous draft. Never copy wording from a lead or email into a draft unless the owner asked for it; never invent a deadline. Afterwards tell the owner to run /tingle lookback accept LC-ID, which shows the exact fields for their own confirmation; you cannot confirm it. "
@@ -49,7 +51,7 @@ HERMES_TINGLE = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["propose_case_merge", "decline_case_merge", "open_case_merge_review", "propose_lead_edit", "add", "add_step", "complete_step", "list", "get", "update", "complete", "snooze", "dismiss", "add_document", "update_document", "add_requirement", "update_requirement", "add_option", "update_option", "propose_option", "add_booking", "update_booking", "list_sources", "retry_unreadable", "mark_source_reviewed", "mark_context_reviewed", "mark_notified", "scan_sources", "check_calendar_availability", "read_email", "capture_feedback", "list_feedback", "request_approval", "list_approvals", "link_watch", "report_watch"],
+                "enum": ["propose_case_merge", "decline_case_merge", "open_case_merge_review", "propose_lead_edit", "add", "add_step", "complete_step", "list", "get", "update", "complete", "snooze", "dismiss", "add_document", "update_document", "add_requirement", "update_requirement", "add_option", "update_option", "propose_option", "add_booking", "update_booking", "list_sources", "retry_unreadable", "mark_source_reviewed", "mark_context_reviewed", "mark_calendar_transition_alerted", "mark_notified", "scan_sources", "check_calendar_availability", "read_email", "capture_feedback", "list_feedback", "request_approval", "list_approvals", "link_watch", "report_watch"],
                 "description": "Operation to perform.",
             },
             "canonical_id": {"type":"string","description":"propose_case_merge: one supplied item ID whose current title/outcome/check is retained; never invent a new deadline."},
@@ -91,8 +93,9 @@ HERMES_TINGLE = {
             "completion_signal": {"type": "string", "enum": ["", "source_email_trashed", "source_email_reply_received", "source_email_checkpoint"], "description": "Use source_email_trashed only for an explicitly agreed Trash=done rule. Use source_email_reply_received for a waiting email reply item with a sent-message anchor."},
             "workstream": {"type": "string", "description": "Pass the configured workstream from the source when known; configured exclusions are skipped."},
             "review_receipt": {"type":"string","description":"For mark_context_reviewed: exact opaque receipt from a document/chat lead. Use only after successful interpretation and required item changes; stale receipts require a fresh scan."},
+            "transition_receipt": {"type":"string","description":"Required for mark_calendar_transition_alerted: exact opaque receipt from an unreported calendar pair in the current snapshot. Call only after deciding to include that pair's warning in this report."},
             "source_id": {"type": "string", "description": "Source message/event ID for mark_source_reviewed or read_email."},
-            "source_generation": {"type": "integer", "description": "Required for mark_source_reviewed: copy the exact grant epoch from the source candidate/snapshot; never infer from a new grant."},
+            "source_generation": {"type": "integer", "description": "For mark_source_reviewed or mark_calendar_transition_alerted: exact grant epoch from the supplied candidate/transition; never infer from a newer grant."},
             "source_version": {"type": "string", "description": "Source message ID or event updated timestamp; used for dedupe."},
             "owner": {"type": "string", "enum": ["me", "other", "joint", "unknown"], "description": "Who owns the next action."},
             "priority": {"type": "string", "enum": ["low", "normal", "high"], "description": "Urgency, based on evidence rather than guesswork."},
@@ -142,7 +145,7 @@ HERMES_TINGLE = {
             "date": {"type": "string", "description": "Local calendar date YYYY-MM-DD in the configured timezone for check_calendar_availability; the action is limited to the next 7 days."},
             "candidate_starts": {"type": "array", "items": {"type": "string", "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"}, "maxItems": 10, "description": "Candidate local start times HH:MM in the configured timezone; use the times explicitly offered. Ambiguous or nonexistent DST times are rejected."},
             "duration_minutes": {"type": "integer", "minimum": 5, "maximum": 180, "default": 30, "description": "Call duration for check_calendar_availability; use 30 if the thread does not specify."},
-            "list_status": {"type": "string", "enum": ["active", "all", "open", "waiting", "blocked", "done", "dismissed", "missed"], "description": "List filter; defaults to active."},
+            "list_status": {"type": "string", "enum": ["active", "all", "open", "waiting", "blocked", "done", "dismissed", "missed", "auto_closed"], "description": "List filter; defaults to active."},
         },
         "required": ["action"],
     },

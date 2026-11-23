@@ -27,7 +27,7 @@ _RELATIVE_RE = re.compile(r"^(\d{1,3})(m|h|d|w)$", re.IGNORECASE)
 # child still serving old code must keep reporting its old version, so the
 # owner can see from chat whether a restart is still needed. Bump it together
 # with plugin.yaml on every meaningful batch (a test guards the match).
-VERSION = "0.9.0"
+VERSION = "0.9.4"
 
 
 def _json(payload: dict[str, Any]) -> str:
@@ -310,6 +310,11 @@ def handle_tool(ctx: Any, args: dict[str, Any], **kwargs: Any) -> str:
                 from hermes_tingle_review import acknowledge
             acknowledge(args.get('review_receipt'))
             return _json({'success':True,'delivery_confirmed':False,'recovery':'If the final report is lost, an owner can use /tingle source review-again document or chat to requeue current leads. This marker records model review, not delivery.'})
+
+        if action == "mark_calendar_transition_alerted":
+            created = store.mark_calendar_transition_alerted(
+                args.get("transition_receipt"), source_generation=args.get("source_generation"))
+            return _json({"success": True, "already_alerted": not created, "delivery_confirmed": False})
 
         if action == "mark_source_reviewed":
             with store.serialized_operation("sources"):
@@ -896,8 +901,8 @@ def handle_command(ctx: Any, raw_args: str, source: Any = None, **kwargs: Any) -
             return str(exc)
     if command in {"remove", "uninstall"}:
         return ("🧹 Removal is a local operator step, not a chat command, so nothing was removed or changed.\n\n"
-                "On the machine that runs Hermes, `tools/tingle_remove.py --plan` shows exactly what would be removed and changes nothing. "
-                "Applying it asks for typed confirmations there. It does not restart the gateway. Steps and what is kept: `docs/uninstall.md`.")
+                "On the machine that runs Hermes, use `python tools/tingle_remove.py -p <profile-name> --plan`. Stop writers, remove any listed Cron IDs with `hermes -p <profile-name> cron remove <id>`, then rerun the plan. "
+                "After Tingle-owned data cleanup succeeds, remove the plugin separately with `hermes -p <profile-name> plugins remove hermes-tingle`. Use `-p default` for the default profile; Tingle never runs the plugin manager. Steps and limits: `docs/uninstall.md`.")
     if command in {"help", "?"}:
         return ("🧝 *Hermes Tingle* - your follow-through helper\n\n"
                 "Every day:\n"

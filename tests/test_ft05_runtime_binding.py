@@ -20,10 +20,12 @@ from contextvars import copy_context
 
 import pytest
 
-gateway_sc = pytest.importorskip("gateway.session_context")
-gateway_session = pytest.importorskip("gateway.session")
-gateway_config = pytest.importorskip("gateway.config")
-dispatch = pytest.importorskip("hermes_cli.plugin_command_dispatch")
+from runtime_support import hermes_import
+
+gateway_sc = hermes_import("gateway.session_context")
+gateway_session = hermes_import("gateway.session")
+gateway_config = hermes_import("gateway.config")
+dispatch = hermes_import("hermes_cli.plugin_command_dispatch")
 
 import hermes_tingle_store as store
 import hermes_tingle

@@ -16,6 +16,11 @@ Record Tingle commit, Hermes commit/version, Python/OS, install method and gatew
 | Incomplete coverage or legacy budget uncertainty | Preserve the diagnostic and current data. Follow reviewed recovery guidance; do not reset counters, erase a gap or invent a confirmed outcome. |
 | Busy revoke/lock/migration error | Stop affected work and report failure honestly. Do not delete lock/database files or claim revocation succeeded. |
 
+- To diagnose skipped review cycles, check whether the pre-run script had new leads or due items. A quiet cycle is not proof of full source coverage.
+- A review acknowledgment is required after the model interprets a lead and completes any item changes; emitting a snapshot is not enough. If the model run or acknowledgment fails, the lead can be retried on a later bounded scan.
+- Review markers are hashes and identifiers, not source text. They expire after one day and are cleared by relevant source, item, policy or consent changes and by source revocation. Hashing is not anonymization.
+- Maintainers can run the daily helper with `--metrics` for content-free gate counters on stderr (wake reasons, category counts, UTF-8 output bytes). They are not model token counts, provider usage, latency, cost savings or durable cron telemetry; default cron output stays quiet and the pinned scheduler discards successful stderr.
+
 Use commands documented by the installed revision. A later branch's recovery command may not exist in an earlier build. Internal paths and private API warnings are maintenance evidence, not public API guarantees.
 
 ## Reproduction and escalation

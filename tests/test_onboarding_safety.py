@@ -60,6 +60,7 @@ def test_undo_preserves_any_modified_item_and_dependents(change):
     before=store.get_item(i['id'])
     result=store.undo_onboarding(expected_origin=lb.ONBOARDING_NOTE)
     assert store.get_item(i['id'])==before and store.get_item(untouched['id']) is None
+    assert store.retirement_state(untouched['id']) is None
     assert result['preserved']==[i['id']] and result['removed']==[untouched['id']]
     assert store.onboarding_state()['state']=='undone'
 

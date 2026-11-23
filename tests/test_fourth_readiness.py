@@ -114,7 +114,7 @@ def test_preexisting_released_history_remains_visible(budget,owner,clock):
     assert store.acknowledge_alert_emissions(token)==1
     assert store.get_item(row['id'])['reminder_count']==0
 
-def test_all_failed_attempts_visible_after_edit(owner,clock,monkeypatch,capsys):
+def test_all_failed_attempts_stay_inspectable_after_edit(owner,clock,monkeypatch,capsys):
     class Broken(io.StringIO):
         def flush(self):raise OSError('synthetic')
     row=item()
@@ -127,7 +127,8 @@ def test_all_failed_attempts_visible_after_edit(owner,clock,monkeypatch,capsys):
     assert len(store.pending_alert_emissions())==4
     assert 'B4:' in plugin.handle_command(None,'delivery',source=owner)
     clock[0]+=timedelta(days=30);assert due_alerts.main()==0
-    assert 'unconfirmed' in capsys.readouterr().out
+    assert capsys.readouterr().out==""
+    assert 'B4:' in plugin.handle_command(None,'delivery',source=owner)
     assert store.get_item(row['id'])['reminder_attempt_count']==4
     assert len(store.pending_alert_emissions())==4
 

@@ -431,7 +431,6 @@ def test_due_alert_script_emits_extra_without_ordinary_reservation(monkeypatch, 
     monkeypatch.setattr(due_alerts,'datetime',Fixed)
     monkeypatch.setattr(sources,'all_due_items',lambda **kw: [])
     monkeypatch.setattr(store,'deadline_catchup_state',lambda **kw: {'complete':True})
-    monkeypatch.setattr(due_alerts,'_unconfirmed_delivery_note',lambda *a,**kw: ('',[]))
     monkeypatch.setattr(store,'record_alert_emission',lambda *a,**kw: pytest.fail('ordinary advancement used'))
     assert due_alerts._main()==0
     text=capsys.readouterr().out

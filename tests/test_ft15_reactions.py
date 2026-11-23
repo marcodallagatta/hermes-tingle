@@ -10,6 +10,8 @@ import sqlite3
 
 import pytest
 
+from runtime_support import hermes_import
+
 import hermes_tingle_store as store
 import hermes_tingle
 
@@ -135,7 +137,7 @@ def test_reaction_failure_never_breaks_the_flow(isolated_db, monkeypatch):
 def test_no_gateway_or_capability_is_a_noop(isolated_db):
     # Real Hermes runtime present but no live gateway: the facade answers
     # ok=False and nothing raises. (Skipped under the stub suite.)
-    pytest.importorskip("hermes_cli.platform_actions")
+    hermes_import("hermes_cli.platform_actions")
     item = json.loads(hermes_tingle.handle_tool(None, {"action": "add", "title": "Synthetic"}))["item"]
     reply = hermes_tingle.handle_command(None, f"done {item['id']}", source=_FakeSource("cmd-1"))
     assert reply.startswith("Marked")

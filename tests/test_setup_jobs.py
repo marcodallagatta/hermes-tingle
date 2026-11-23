@@ -28,13 +28,13 @@ def test_readme_sample_is_valid_and_excludes_synthetic_ticket(tmp_path):
 def test_fresh_setup_docs_use_typed_source_choices():
     root = Path(__file__).resolve().parents[1]
     for relative in ("README.md", "docs/installation.md", "docs/beta-setup.md",
-                     "docs/onboarding.md", "docs/feature-tracker.md"):
+                     "docs/onboarding.md"):
         text = (root / relative).read_text(encoding="utf-8")
         assert "/tingle setup sources all" in text
         assert "/tingle setup sources none" in text
         assert "Keep all off for now" not in text
     for relative in ("README.md", "docs/installation.md", "docs/beta-setup.md",
-                     "docs/onboarding.md", "docs/feature-tracker.md"):
+                     "docs/onboarding.md"):
         assert "/tingle source enable <kind>" in (root / relative).read_text(encoding="utf-8")
 
 
@@ -406,6 +406,17 @@ def test_review_prompt_preserves_independent_reply_waits(tmp_path):
     prompt = setup_jobs.job_specs(tmp_path)[0]['prompt']
     assert 'A linked reply-wait remains independently due' in prompt
     assert 'never complete the broader goal based on a reply alone' in prompt
+
+
+def test_review_prompt_applies_owner_nudge_calibration(tmp_path, synthetic_settings):
+    prompt = setup_jobs.job_specs(tmp_path)[0]["prompt"]
+    assert "Calendar conflict deduplication is receipt-driven from the supplied transition data" in prompt
+    assert "never infer prior alerts from attached-session history" in prompt
+    assert "For low-urgency service or account notices already delivered by email, do not repeat the notice in the report" in prompt
+    assert "If such a notice has a real deadline requiring action, add one quiet reminder before it and omit the notice from the report" in prompt
+    assert "or duplicate an existing reminder" in prompt
+    assert "Do not present retry-loop or delivery-status bookkeeping as a follow-up item" in prompt
+    assert "if a failure needs an owner decision, state it plainly as a failure rather than a follow-up" in prompt
 
 
 def test_verified_email_reply_nudges_offer_a_grounded_draft_without_sending(tmp_path):

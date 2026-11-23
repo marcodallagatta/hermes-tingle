@@ -1,15 +1,10 @@
 """Script-only deadline alerts; empty stdout means no alert is sent."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import re
 import sys
 from typing import Any
-
-# Optional receipts can confirm a precise batch. Lack of receipt does not block
-# automatic reminders. After this grace, reserve one diagnostic inclusion per
-# batch. That attempt may also be lost; the owner recovery view remains usable.
-UNCONFIRMED_ALERT_GRACE = timedelta(hours=6)
 
 
 def _format_time(value: str | None) -> str:
@@ -149,30 +144,6 @@ def _render_selected(items: list[dict[str, Any]], next_step=None, get_item=None)
     return "\n".join(lines)
 
 
-def _unconfirmed_delivery_note(store, *, now: datetime) -> tuple[str, list[int]]:
-    """Summarize emitted-but-unconfirmed reminder batches: counts and times only.
-
-    Never include item IDs or titles here; the note exists because delivery of
-    earlier batches is uncertain, so it must not re-expose their content.
-    Older store versions without the emission log simply skip the disclosure.
-    """
-    unsurfaced = getattr(store, "unsurfaced_emissions", None)
-    if unsurfaced is None:
-        return "", []
-    pending = unsurfaced(older_than=now - UNCONFIRMED_ALERT_GRACE, now=now)
-    if not pending:
-        return "", []
-    first = _format_time(pending[0].get("emitted_at"))
-    latest = _format_time(pending[-1].get("emitted_at"))
-    span = f"prepared at {first}" if first == latest else f"prepared between {first} and {latest}"
-    note = (f"Note: {len(pending)} earlier reminder batch(es) ({span}) have unconfirmed delivery or an unresolved cycle budget; "
-            "if they never arrived, the reminder channel may not be reaching you. "
-            "Automatic repeats use the stored cadence, up to four attempts per cycle; uncertain attempts may duplicate. Use `/tingle delivery` to inspect or explicitly retry within that budget. No acknowledgment is required.")
-    if any(row.get("budget_reserved") == 2 for row in pending):
-        note += " Some legacy cycle budgets cannot be proved; affected automatic attempts are blocked. Inspect `/tingle delivery`, then explicitly snooze or set a new schedule for a new cycle. Retry/receipt cannot reset an unknown budget."
-    return note, [int(row["id"]) for row in pending]
-
-
 def main() -> int:
     # Installed helpers live outside the plugin tree. Bootstrap before importing
     # any plugin module, including the outbox lock used by this entry point.
@@ -207,9 +178,6 @@ def _main() -> int:
     catchup = store.deadline_catchup_state(now=now)
     if not catchup["complete"]:
         message += "\nHard-deadline catch-up is incomplete; earlier missed windows are being recorded in bounded batches. Later checks continue without skipping windows."
-    note, surfaced_ids = _unconfirmed_delivery_note(store, now=now)
-    if note:
-        message = (message + "\n" if message else "") + note
     # Extra one-offs reserve in their separate log before output and never
     # consume ordinary attempt budgets. Main holds the same reminder lock.
     import hermes_tingle_expiry as expiry
@@ -228,11 +196,6 @@ def _main() -> int:
             return 0
         batch = store.get_alert_emission(emission_id)
         message += f"\nBatch B{emission_id}: automatic repeats, up to four attempts per cycle; no acknowledgment required. Optional receipt: `/tingle ack {batch['receipt_token']}` only if received. Unknown delivery may duplicate; inspect `/tingle delivery`."
-    # Reserve one diagnostic attempt before output too: a failed/unknown flush
-    # must not create an unbounded disclosure retry loop outside item budgets.
-    mark_surfaced = getattr(store, "mark_emissions_surfaced", None)
-    if surfaced_ids and mark_surfaced is not None:
-        mark_surfaced(surfaced_ids)
     try:
         extra = expiry.render_nudges(expiry.reserve_due(now=now), now=now)
     except ValueError as exc:

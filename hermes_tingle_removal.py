@@ -7,7 +7,6 @@ import json
 import os
 import stat
 import sys
-import subprocess
 from contextlib import ExitStack
 from pathlib import Path
 try:
@@ -118,10 +117,7 @@ def inventory(home, api=None):
     # Show it and its lock too; cleanup handles their own workflow updates separately.
     for name in (resources.MANIFEST,resources.LOCK):add(home/name,'metadata')
     install=resources.safe(home/'plugins'/'hermes-tingle',home)
-    if install.exists():
-        # Manager owns installation metadata. Its existing remove command handles
-        # that state; an explicit inventory confirmation adopts the exact tree.
-        tree(install,'install')
+    plugin_installed=install.exists()
     recovery=resources.safe(home/'.tingle-removal-recovery',home)
     if recovery.exists():tree(recovery,'recovery')
     jobs=[]
@@ -134,12 +130,14 @@ def inventory(home, api=None):
         job=api['get'](summary['id'])
         if not isinstance(job,dict) or job.get('id')!=summary['id']:raise ValueError('Cron readback disagreement')
         entry=manifest['jobs'].get(job['id'])
-        relevant=entry is not None or job.get('name') in ('Tingle daily review','Tingle nudges','[SA] Hermes Tingle daily review','[S] Hermes Tingle deadline nudges') or Path(str(job.get('script') or '')).name in HELPERS
+        display_name=str(job.get('name') or '').strip()
+        relevant=entry is not None or display_name in ('Tingle daily review','Tingle nudges','[SA] Hermes Tingle daily review','[S] Hermes Tingle deadline nudges') or Path(str(job.get('script') or '')).name in HELPERS
         if relevant:
             definition=resources.job_definition(job)
             jobs.append({'id':job['id'],'definition':definition,'ownership':'created' if entry and entry.get('definition')==definition else 'needs explicit adoption',
-                         'busy':bool(job.get('fire_claim') or job.get('run_claim'))})
-    plan={'home':str(home),'resources':found,'jobs':jobs,'manifest':manifest,
+                         'busy':bool(job.get('fire_claim') or job.get('run_claim')),
+                         'cleanup':'manual Hermes Cron removal required'})
+    plan={'home':str(home),'resources':found,'jobs':jobs,'manifest':manifest,'plugin_installed':plugin_installed,
           'native_hook':False,'manager_record_present':not api.get('metadata_absent',lambda:True)(),'limits':'Hermes history, unrelated backups/accounts/tokens and external copies are outside removal scope.'}
     plan['token']=resources.digest(json.dumps(plan,sort_keys=True).encode())[:12]
     return plan
@@ -164,7 +162,7 @@ def verify_quiescent(home,api):
             raise ValueError('Another Hermes/Tingle process may still write. Stop writers explicitly and retry.')
 
 
-def remove(home, plan, *, confirmation, writers_stopped=False, adopt_legacy=False, keep_data=False, api=None, manager=None):
+def remove(home, plan, *, confirmation, writers_stopped=False, adopt_legacy=False, keep_data=False, api=None):
     import fcntl
     home=Path(home).resolve(strict=True)
     api=api or runtime(home)
@@ -173,11 +171,11 @@ def remove(home, plan, *, confirmation, writers_stopped=False, adopt_legacy=Fals
     if str(home)!=plan['home']:raise ValueError('Profile changed')
     current=inventory(home,api)
     if current!=plan:raise ValueError('Inventory changed; review again before removal')
+    if current['jobs']:
+        ids=', '.join(job['id'] for job in current['jobs'])
+        raise ValueError('Tingle Cron jobs remain. This remover does not change Cron jobs: stop all writers, remove the exact listed IDs manually through Hermes, then rerun --plan. No Tingle resources changed. Job IDs: '+ids)
     legacy=[p for p,r in plan['resources'].items() if r['ownership']=='needs explicit adoption' and not (keep_data and r['kind'] in ('data','metadata'))]
-    legacy += ['job:'+j['id'] for j in plan['jobs'] if j['ownership']=='needs explicit adoption']
     if legacy and not adopt_legacy:raise ValueError('Legacy/changed resources need explicit inventory adoption: '+', '.join(legacy))
-    if plan['manager_record_present'] and not any(r['kind']=='install' for r in plan['resources'].values()):
-        raise ValueError('Native manager record remains without its install tree; repair/inspect that manager record before cleanup. Nothing changed.')
     lock_existed=(home/resources.LOCK).exists()
     with resources.locked(home):
         checked=inventory(home,api)
@@ -186,11 +184,13 @@ def remove(home, plan, *, confirmation, writers_stopped=False, adopt_legacy=Fals
         comparable['token']=plan['token']
         if comparable!=plan:raise ValueError('Inventory changed while acquiring mutation fence')
         resources._mutation_epochs[home]=resources._mutation_epochs.get(home,0)+1
-        return _remove_fenced(home,plan,keep_data=keep_data,api=api,manager=manager)
+        return _remove_fenced(home,plan,keep_data=keep_data,api=api)
 
 
-def _remove_fenced(home,plan,*,keep_data,api,manager):
+def _remove_fenced(home,plan,*,keep_data,api):
     import fcntl
+    if plan['jobs']:
+        raise ValueError('Tingle Cron jobs remain; stop writers and remove them through Hermes before Tingle cleanup. Nothing changed.')
     verify_quiescent(home,api)
     marker=resources.safe(home/resources.MARKER,home)
     if marker.exists():
@@ -206,7 +206,7 @@ def _remove_fenced(home,plan,*,keep_data,api,manager):
         recovery,recovery_hashes=recovery_bundle(home)
         # These are the only permitted self-writes after the reviewed inventory.
         # Recovery registration atomically replaces the manifest. Freeze exact
-        # resulting bytes AND identities, never adopt later manager-phase edits.
+        # resulting bytes AND identities, never adopt later concurrent edits.
         workflow_expected={str(path.relative_to(home)):fingerprint(path,home)
                            for path in (home/resources.MANIFEST,home/resources.LOCK,marker,recovery,
                                         *(recovery/name for name in recovery_hashes)) if path.exists()}
@@ -233,37 +233,9 @@ def _remove_fenced(home,plan,*,keep_data,api,manager):
                     stack.callback(conn.close)
                     conn.execute('BEGIN IMMEDIATE')
             verify_quiescent(home,api)
-            from contextlib import nullcontext
-            transaction=api.get('transaction',nullcontext)
-            with transaction() if plan['jobs'] else nullcontext():
-                for job in plan['jobs']:
-                    live=api['get'](job['id'])
-                    if live is None:continue
-                    if resources.job_definition(live)!=job['definition']:
-                        raise ValueError('Cron definition changed; no guessed job deletion')
-                    paused=api['pause'](job['id'])
-                    if not isinstance(paused,dict) or paused.get('id')!=job['id'] or paused.get('enabled') is not False:
-                        raise ValueError('Job pause unconfirmed')
-                    live=api['get'](job['id'])
-                    if resources.job_definition(live)!=job['definition']:
-                        raise ValueError('Cron definition changed during pause')
-                    if live.get('fire_claim') or live.get('run_claim'):
-                        raise ValueError('Job still has an in-flight claim; wait/inspect before retrying')
-                    if api['remove'](job['id']) is not True or api['get'](job['id']) is not None:
-                        raise ValueError('Exact job removal unconfirmed')
-            # A manager failure must leave cleanup retryable and visible. Do not
-            # claim uninstall merely from a successful subprocess exit.
-            if any(r['kind']=='install' for r in plan['resources'].values()):
-                current_install={p:r for p,r in inventory(home,api)['resources'].items() if r['kind']=='install'}
-                expected_install={p:r for p,r in plan['resources'].items() if r['kind']=='install'}
-                if current_install!=expected_install:raise ValueError('Install tree changed before native removal')
-                if manager is None:
-                    def manager():
-                        result=subprocess.run([sys.executable,'-m','hermes_cli.main','plugins','remove','hermes-tingle'],capture_output=True,text=True,env={**os.environ,'HERMES_HOME':str(home)})
-                        if result.returncode:raise ValueError('Native plugin manager removal failed; inspect locally')
-                manager()
-                if (home/'plugins'/'hermes-tingle').exists():raise ValueError('Native plugin tree removal not verified')
-                if not api.get('metadata_absent',lambda:True)():raise ValueError('Native manager metadata removal not verified')
+            # The package install and manager ledger are Hermes-owned. Tingle only
+            # removes its profile resources; the operator runs the explicit-profile
+            # Hermes plugin-remove command after this cleanup succeeds.
         verify_workflow()
         # Locks/SQLite handles close before unlink. The maintenance marker stops
         # cooperative Tingle entry points from reopening data in this interval.
@@ -292,14 +264,11 @@ def _remove_fenced(home,plan,*,keep_data,api,manager):
         if not keep_data:
             (home/resources.MANIFEST).unlink(missing_ok=True)
             (home/resources.LOCK).unlink(missing_ok=True)
-        for job in plan['jobs']:
-            if api['get'](job['id']) is not None:remaining.append('job:'+job['id'])
         for relative,entry in plan['resources'].items():
             if keep_data and entry['kind'] in ('data','metadata'):continue
             if entry['kind']=='recovery':continue
             if (home/relative).exists():remaining.append(relative)
-        if not api.get('metadata_absent',lambda:True)():remaining.append('native manager install metadata')
-        if remaining:raise ValueError('Remaining resources: '+', '.join(remaining))
+        if remaining:raise ValueError('Remaining Tingle-owned resources: '+', '.join(remaining))
         # Only the fixed, byte-verified bundle created by this workflow is removed.
         for name,expected in recovery_hashes.items():
             path=resources.safe(recovery/name,home)
@@ -308,7 +277,8 @@ def _remove_fenced(home,plan,*,keep_data,api,manager):
                 path.unlink()
         if recovery.exists():recovery.rmdir()
         marker.unlink()
-        return {'removed':True,'kept_data':keep_data,'limits':plan['limits']}
+        return {'cleanup_completed':True,'plugin_uninstall_required':bool(plan['plugin_installed'] or plan['manager_record_present']),
+                'kept_data':keep_data,'limits':plan['limits']}
     except Exception as exc:
         # Keep the small maintenance marker deliberately after failure. It blocks
         # resurrection and is named in recovery instructions, never hidden.
@@ -318,4 +288,4 @@ def _remove_fenced(home,plan,*,keep_data,api,manager):
             detail='Remaining inventory: '+', '.join(remaining_names)
         except Exception as inspect_error:
             detail='Remaining inventory could not be verified: '+str(inspect_error)
-        raise ValueError('Removal incomplete: '+str(exc)+'. '+detail+'. Maintenance marker remains at '+str(marker)+'; rerun '+str(home/'.tingle-removal-recovery'/'tingle_remove.py')+' after resolving the reported blocker.') from exc
+        raise ValueError('Removal incomplete: '+str(exc)+'. '+detail+'. Maintenance marker remains at '+str(marker)+'; rerun python '+str(home/'.tingle-removal-recovery'/'tingle_remove.py')+' -p <profile-name> after resolving the reported blocker.') from exc

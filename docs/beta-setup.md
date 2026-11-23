@@ -52,4 +52,4 @@ Before turning sources on, the tester should understand and accept:
 - The previously failing lookback-ordering test is fixed in this release; the full suite is green.
 - Local chat-discovery cues are deliberately conservative; implicit commitments and other phrasings can be missed. No automatic item creation without explicit owner-DM acceptance.
 - The static plugin validator reports private Hermes-core imports that may break on any runtime release; the manifest's compatibility floor is not a stability guarantee.
-- The static isolation audit classifies private Cron lock-state writes in the removal runtime as `in_process` and reports `host_ready: false`. This is a code-path classification, not proof of actual host-isolated execution; runtime isolation behavior remains unverified.
+- Tingle's Cron inventory is read-only. The local remover refuses while any Tingle job remains; after stopping writers, remove the exact IDs through Hermes and rerun the inventory. Pinned-runtime tests check registration and tool invocation under both `host` and `in_process` isolation.

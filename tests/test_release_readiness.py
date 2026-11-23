@@ -202,28 +202,14 @@ with s.serialized_operation('sources'):
     assert out.strip()=="entered"
 
 
-def test_old_unconfirmed_batch_disclosed_without_due_item_and_not_self_replicated(db,monkeypatch,capsys):
+def test_old_unconfirmed_batch_stays_silent_without_due_item(db,monkeypatch,capsys):
     store.record_alert_emission(seed_outbox_items(store, ["HT-ABC123"], now=datetime.now(timezone.utc)-timedelta(days=1)),now=datetime.now(timezone.utc)-timedelta(days=1))
     monkeypatch.setattr(sources,"all_due_items",lambda **kwargs:[])
     assert due_alerts.main()==0
-    out=capsys.readouterr().out
-    assert "unconfirmed" in out and "HT-ABC123" not in out
+    assert capsys.readouterr().out==""
     assert scalar("SELECT count(*) FROM alert_emissions")==1
+    assert scalar("SELECT count(*) FROM alert_emissions WHERE surfaced_at IS NULL AND acked_at IS NULL")==1
     assert due_alerts.main()==0 and capsys.readouterr().out==""
-    store.acknowledge_alert_emissions()
-    assert due_alerts.main()==0 and capsys.readouterr().out==""
-
-
-def test_failed_disclosure_flush_reserved_but_not_emitted_or_delivered(db,monkeypatch):
-    store.record_alert_emission(seed_outbox_items(store, ["HT-ABC123"], now=datetime.now(timezone.utc)-timedelta(days=1)),now=datetime.now(timezone.utc)-timedelta(days=1))
-    monkeypatch.setattr(sources,"all_due_items",lambda **kwargs:[])
-    class Broken(io.StringIO):
-        def flush(self):raise OSError("synthetic flush failure")
-    monkeypatch.setattr(sys,"stdout",Broken())
-    assert due_alerts.main()==1
-    assert scalar("SELECT count(*) FROM alert_emissions WHERE surfaced_at IS NOT NULL")==1
-    assert scalar("SELECT count(*) FROM alert_emissions WHERE emitted_to_gateway_at IS NOT NULL OR acked_at IS NOT NULL")==0
-    assert due_alerts.main()==0  # no unbounded diagnostic retries after unknown output
 
 
 
@@ -252,9 +238,20 @@ def test_fresh_and_ambiguous_upgrade_sources_off_explicit_grants_preserved(db):
 
 def test_legacy_alias_works_through_tool_commands_and_relations(db):
     item=store.add_item(title="Synthetic old reference")
-    conn=store._connect();conn.execute("UPDATE hermes_tingle_items SET id='OL-ABC123' WHERE id=?",(item["id"],));conn.commit();conn.close()
+    conn=store._connect()
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("UPDATE hermes_tingle_items SET id='OL-ABC123' WHERE id=?",(item["id"],))
+    conn.execute("UPDATE hermes_tingle_retirement SET item_id='OL-ABC123' WHERE item_id=?",(item["id"],))
+    conn.commit()
+    conn.close()
     migrated=store.get_item("OL-ABC123")
+    assert migrated is not None
     assert migrated["id"].startswith("HT-")
+    assert store.retirement_state(migrated["id"]) is not None
+    conn=store._connect()
+    assert conn.execute("SELECT 1 FROM hermes_tingle_retirement WHERE item_id='OL-ABC123'").fetchone() is None
+    conn.close()
     assert store.get_item(migrated["id"])["id"]==migrated["id"]
     store.add_document("OL-ABC123",name="Synthetic alias document")
     assert store.get_item("OL-ABC123")["documents"][0]["name"]=="Synthetic alias document"

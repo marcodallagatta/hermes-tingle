@@ -33,7 +33,7 @@ PLUGIN_ID = "hermes-tingle"
 
 MAX_EMAIL_CANDIDATES = 100
 BODY_READ_DEDUPE_DAYS = 14
-_STATUSES = {"open", "waiting", "blocked", "done", "dismissed", "missed", "merged"}
+_STATUSES = {"open", "waiting", "blocked", "done", "dismissed", "missed", "merged", "auto_closed"}
 _ACTIVE_STATUSES = ("open", "waiting", "blocked")
 _SOURCE_TYPES = {"conversation", "email", "calendar", "manual"}
 _PRIORITIES = {"low", "normal", "high"}
@@ -148,6 +148,15 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL,
             completed_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS hermes_tingle_retirement (
+            item_id TEXT PRIMARY KEY REFERENCES hermes_tingle_items(id) ON DELETE CASCADE,
+            retirement_class TEXT NOT NULL DEFAULT '',
+            last_activity_at TEXT,
+            auto_close_at TEXT,
+            evidence_key TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_tingle_retirement_due
+            ON hermes_tingle_retirement(auto_close_at);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_hermes_tingle_items_source_ref
             ON hermes_tingle_items(source_type, source_ref) WHERE source_ref <> '';
         CREATE INDEX IF NOT EXISTS idx_hermes_tingle_items_due
@@ -171,6 +180,19 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS calendar_transition_alerts (
+            pair_key TEXT PRIMARY KEY CHECK(length(pair_key)=64),
+            alerted_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS calendar_transition_receipts (
+            receipt_hash TEXT PRIMARY KEY CHECK(length(receipt_hash)=64),
+            pair_key TEXT NOT NULL CHECK(length(pair_key)=64),
+            source_generation INTEGER NOT NULL,
+            policy_key TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_calendar_transition_receipts_pair
+            ON calendar_transition_receipts(pair_key, expires_at);
         CREATE TABLE IF NOT EXISTS gmail_pending_messages (
             message_id TEXT PRIMARY KEY,
             queued_at TEXT NOT NULL
@@ -245,10 +267,35 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     if "generation" not in candidate_columns:
         conn.execute("ALTER TABLE email_candidates ADD COLUMN generation INTEGER NOT NULL DEFAULT -1")
     columns = {row[1] for row in conn.execute("PRAGMA table_info(hermes_tingle_items)")}
+    legacy_retirement = {"retirement_class", "retirement_last_activity_at", "auto_close_at", "retirement_evidence_key"} & columns
+    if legacy_retirement:
+        defaults = {
+            "retirement_class": "''",
+            "retirement_last_activity_at": "created_at",
+            "auto_close_at": "NULL",
+            "retirement_evidence_key": "''",
+        }
+        # A legacy marker may legitimately be NULL. Coalesce every nullable
+        # legacy value before INSERT so one NULL cannot silently skip the whole
+        # row and then lose its original activity/date to DROP COLUMN.
+        select_expr = ["id"] + [
+            "COALESCE(" + name + "," + defaults[name] + ")" if name in legacy_retirement else defaults[name]
+            for name in ("retirement_class", "retirement_last_activity_at", "auto_close_at", "retirement_evidence_key")
+        ]
+        conn.execute(
+            "INSERT OR IGNORE INTO hermes_tingle_retirement(item_id,retirement_class,last_activity_at,auto_close_at,evidence_key) "
+            "SELECT " + ",".join(select_expr) + " FROM hermes_tingle_items"
+        )
+        conn.execute("DROP INDEX IF EXISTS idx_tingle_auto_close")
+        for column in sorted(legacy_retirement):
+            conn.execute("ALTER TABLE hermes_tingle_items DROP COLUMN " + column)
+        columns -= legacy_retirement
     if 'topic_emoji' not in {r[1] for r in conn.execute('PRAGMA table_info(hermes_tingle_items)')}:
         conn.execute("ALTER TABLE hermes_tingle_items ADD COLUMN topic_emoji TEXT NOT NULL DEFAULT '📌'")
     if "completion_signal" not in columns:
         conn.execute("ALTER TABLE hermes_tingle_items ADD COLUMN completion_signal TEXT NOT NULL DEFAULT ''")
+    # Retirement state lives in its own table: SELECT * on items must stay stable.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tingle_retirement_due ON hermes_tingle_retirement(auto_close_at)")
     if "email_review_plan" not in columns:
         conn.execute("ALTER TABLE hermes_tingle_items ADD COLUMN email_review_plan TEXT NOT NULL DEFAULT ''")
     if "reply_interval_seconds" not in columns:
@@ -719,6 +766,9 @@ def _migrate_legacy_item_ids(conn: sqlite3.Connection) -> int:
     for old_id, new_id in mapping.items():
         for table, column in references:
             conn.execute(f"UPDATE {table} SET {column}=? WHERE {column}=?", (new_id, old_id))
+        # The new parent already exists, so the side-table FK stays valid while
+        # lifecycle state follows a legacy identifier into its canonical ID.
+        conn.execute("UPDATE hermes_tingle_retirement SET item_id=? WHERE item_id=?", (new_id, old_id))
     for old_id in mapping:
         conn.execute("DELETE FROM hermes_tingle_items WHERE id=?", (old_id,))
     for old_id, new_id in mapping.items():
@@ -806,6 +856,19 @@ def _public(row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
     return result
 
 
+def _retirement_for(conn: sqlite3.Connection, item_id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM hermes_tingle_retirement WHERE item_id=?", (item_id,)).fetchone()
+
+
+def retirement_state(item_id: str) -> dict[str, Any] | None:
+    """Internal read seam for retirement policy state; never included in item payloads."""
+    conn = _connect()
+    try:
+        row = _retirement_for(conn, resolve_item_id(item_id))
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
+
 def _next_check(
     *, now: datetime, due_at: datetime | None, owner: str, priority: str, status: str,
 ) -> datetime:
@@ -823,6 +886,142 @@ def _next_check(
     if priority == "low":
         return now + timedelta(days=14)
     return now + timedelta(days=7)
+
+
+_RETIREMENT_DAYS = {"deadline": 7, "waiting": 270, "default": 90}
+_MAX_ITEM_AGE_DAYS = 365
+_DEADLINE_REMINDERS_BEFORE_CLOSE = 3
+
+
+def _retirement_class(*, due_at: datetime | None, status: str, owner: str,
+                      hard_deadline: bool = False, has_open_wait: bool = False) -> str:
+    if due_at is not None or hard_deadline:
+        return "deadline"
+    if status == "waiting" or owner in {"other", "joint"} or has_open_wait:
+        return "waiting"
+    return "default"
+
+
+def _has_open_wait(conn: sqlite3.Connection, item_id: str) -> bool:
+    return bool(conn.execute(
+        """SELECT 1 FROM hermes_tingle_steps s JOIN hermes_tingle_items w ON w.id=s.wait_item_id
+           WHERE s.goal_id=? AND COALESCE(s.skipped,0)=0 AND COALESCE(s.done,0)=0
+             AND w.status IN ('open','waiting','blocked','missed')
+             AND w.completion_signal='source_email_reply_received' LIMIT 1""",
+        (item_id,),
+    ).fetchone())
+
+
+_RETIREMENT_EVIDENCE_BITS = 4096
+_RETIREMENT_EVIDENCE_PREFIX = "rb1:"
+
+
+def _evidence_positions(key: str) -> tuple[int, ...]:
+    digest = hashlib.sha256(key.encode("utf-8")).digest()
+    return tuple(int.from_bytes(digest[offset:offset + 2], "big") % _RETIREMENT_EVIDENCE_BITS
+                 for offset in (0, 2, 4, 6))
+
+
+def _evidence_mask(key: str) -> int:
+    mask = 0
+    for position in _evidence_positions(key):
+        mask |= 1 << position
+    return mask
+
+
+def _decode_retirement_evidence(value: Any) -> int:
+    """Decode the bounded no-false-negative seen-key Bloom filter.
+
+    Accept the early single-hash and JSON-list encodings additively during upgrade.
+    """
+    if not value:
+        return 0
+    text = str(value)
+    if text.startswith(_RETIREMENT_EVIDENCE_PREFIX):
+        try:
+            raw = bytes.fromhex(text[len(_RETIREMENT_EVIDENCE_PREFIX):])
+            if len(raw) == _RETIREMENT_EVIDENCE_BITS // 8:
+                return int.from_bytes(raw, "big")
+        except ValueError:
+            pass
+        return 0
+    try:
+        legacy = json.loads(text)
+        if isinstance(legacy, list):
+            bits = 0
+            for key in legacy:
+                if isinstance(key, str):
+                    bits |= _evidence_mask(key)
+            return bits
+    except ValueError:
+        pass
+    return _evidence_mask(text[:128])
+
+
+def _remember_retirement_evidence(bits: int, key: str) -> tuple[bool, str]:
+    mask = _evidence_mask(key)
+    seen = bits & mask == mask
+    updated = bits if seen else bits | mask
+    encoded = (_RETIREMENT_EVIDENCE_PREFIX
+               + updated.to_bytes(_RETIREMENT_EVIDENCE_BITS // 8, "big").hex())
+    return seen, encoded
+
+
+def _auto_close_at(*, retirement_class: str, created_at: datetime, last_activity_at: datetime,
+                   due_at: datetime | None) -> datetime:
+    """Return a stable item close date, bounded by one year from creation.
+
+    A deadline item closes a fixed grace after its deadline; later owner edits
+    do not move that deadline. Other classes count inactivity from the last
+    meaningful owner/evidence change.
+    """
+    if retirement_class == "deadline" and due_at is not None:
+        target = due_at + timedelta(days=_RETIREMENT_DAYS["deadline"])
+    else:
+        days = _RETIREMENT_DAYS.get(retirement_class, _RETIREMENT_DAYS["default"])
+        target = last_activity_at + timedelta(days=days)
+    return min(target, created_at + timedelta(days=_MAX_ITEM_AGE_DAYS))
+
+
+def _touch_retirement_activity(conn: sqlite3.Connection, item_id: str, now: Any) -> None:
+    """Sync retirement state after a real content change. Callers must only invoke
+    this after a structured write that actually changed content."""
+    row = conn.execute(
+        "SELECT created_at,due_at,status,owner,hard_deadline FROM hermes_tingle_items WHERE id=?",
+        (item_id,),
+    ).fetchone()
+    if row is None:
+        return
+    existing = _retirement_for(conn, item_id)
+    created_at = _parse_time(row["created_at"], field="created_at")
+    if created_at is None:
+        return
+    due_at = _parse_time(row["due_at"], field="due_at") if row["due_at"] else None
+    activity_at = _now(now)
+    retirement_class = _retirement_class(due_at=due_at, status=str(row["status"]),
+                                         owner=str(row["owner"]), hard_deadline=bool(row["hard_deadline"]),
+                                         has_open_wait=_has_open_wait(conn, item_id))
+    auto_close_at = _auto_close_at(retirement_class=retirement_class, created_at=created_at,
+                                   last_activity_at=activity_at, due_at=due_at).isoformat(timespec="seconds")
+    if existing is None:
+        _ensure_retirement_row(
+            conn, item_id, created_at=row["created_at"], retirement_class=retirement_class,
+            last_activity_at=activity_at.isoformat(timespec="seconds"), auto_close_at=auto_close_at,
+        )
+    else:
+        conn.execute(
+            "UPDATE hermes_tingle_retirement SET retirement_class=?,last_activity_at=?,auto_close_at=? WHERE item_id=?",
+            (retirement_class, activity_at.isoformat(timespec="seconds"), auto_close_at, item_id),
+        )
+
+
+def _ensure_retirement_row(conn: sqlite3.Connection, item_id: str, *, created_at: str,
+                           retirement_class: str, last_activity_at: str, auto_close_at: str) -> None:
+    conn.execute(
+        """INSERT INTO hermes_tingle_retirement(item_id,retirement_class,last_activity_at,auto_close_at)
+           VALUES(?,?,?,?) ON CONFLICT(item_id) DO NOTHING""",
+        (item_id, retirement_class, last_activity_at, auto_close_at),
+    )
 
 
 _RECUR_UNITS = {"day", "month", "year"}
@@ -1038,7 +1237,7 @@ def add_item(
     summary = str(summary or "").strip()
     if len(summary) > 1200:
         raise ValueError("summary must be at most 1200 characters")
-    if status not in _STATUSES - {"done", "dismissed"}:
+    if status not in {"open", "waiting", "blocked"}:
         raise ValueError("new items must have status open, waiting, or blocked")
     if owner not in {"me", "other", "joint", "unknown"}:
         raise ValueError("owner must be me, other, joint, or unknown")
@@ -1089,6 +1288,10 @@ def add_item(
     if completion_signal == "source_email_reply_received":
         interval = int((check_dt - now_dt).total_seconds())
         reply_interval_seconds = interval if interval > 0 else 2 * 24 * 60 * 60
+    retirement_class = _retirement_class(due_at=due_dt, status=status, owner=owner, hard_deadline=bool(hard))
+    retirement_last_activity_at = now_s
+    auto_close_at = _auto_close_at(retirement_class=retirement_class, created_at=now_dt,
+                                   last_activity_at=now_dt, due_at=due_dt).isoformat(timespec="seconds")
 
     conn = _conn if _conn is not None else _connect()
     try:
@@ -1147,6 +1350,10 @@ def add_item(
                      due_s if recur_days else None, origin_platform, origin_chat_id, origin_message_id,
                      hard, now_s, now_s),
                 )
+                _ensure_retirement_row(
+                    conn, item_id, created_at=now_s, retirement_class=retirement_class,
+                    last_activity_at=now_s, auto_close_at=auto_close_at,
+                )
                 break
             except sqlite3.IntegrityError as exc:
                 if not _is_primary_key_collision(exc):
@@ -1184,9 +1391,9 @@ def _steps(conn: sqlite3.Connection, goal_id: str) -> list[dict[str, Any]]:
     steps = []
     for row in rows:
         complete = row['wait_status'] == 'done' if row['wait_item_id'] else bool(row['done'])
-        skipped = bool(row['skipped'])
-        # resolved: no longer blocks the goal - either genuinely complete or explicitly
-        # skipped by the user. A dismissed reply-wait is neither; its step stays open.
+        skipped = bool(row['skipped']) or bool(row['wait_item_id'] and row['wait_status'] == 'auto_closed')
+        # resolved: no longer blocks the goal - complete, explicitly skipped, or
+        # auto-closed as stale. A dismissed reply-wait remains unresolved.
         steps.append({**dict(row), 'complete': complete, 'skipped': skipped,
                       'resolved': complete or skipped})
     return steps
@@ -1212,6 +1419,7 @@ def add_document(item_id: str, *, name: str, valid_until: str = '', note: str = 
         conn.execute("INSERT INTO hermes_tingle_documents (item_id,position,name,state,valid_until,note,created_at,updated_at) VALUES (?,?,?,'needed',?,?,?,?)",
                      (item_id, position, name.strip(), _stamp(valid_until, field='valid_until') if valid_until else None, note or '', now_s, now_s))
         conn.execute("UPDATE hermes_tingle_items SET reminder_revision=reminder_revision+1,updated_at=? WHERE id=?", (now_s, item_id))
+        _touch_retirement_activity(conn, item_id, now_s)
         conn.commit()
         return next(d for d in _documents(conn, item_id) if d['position'] == position)
     finally:
@@ -1224,13 +1432,17 @@ def update_document(item_id: str, *, position: int, state: str = '', valid_until
     item_id = resolve_item_id(item_id)
     conn = _connect()
     try:
-        row = conn.execute("SELECT 1 FROM hermes_tingle_documents WHERE item_id=? AND position=?",
+        row = conn.execute("SELECT * FROM hermes_tingle_documents WHERE item_id=? AND position=?",
                            (item_id, position)).fetchone()
         if row is None:
             raise ValueError(f"no document {position} on {item_id}")
         if state and state not in ("needed", "collected", "submitted", "accepted", "rejected"):
             raise ValueError("document state must be needed, collected, submitted, accepted or rejected; 'expired' is set only by the validity sweep")
         now_s = _now()
+        new_valid_until = _stamp(valid_until, field='valid_until') if valid_until else row["valid_until"]
+        progress_changed = ((bool(state) and state != row["state"])
+                            or (bool(valid_until) and new_valid_until != row["valid_until"])
+                            or (bool(note) and note != row["note"]))
         if state:
             conn.execute("UPDATE hermes_tingle_documents SET state=? WHERE item_id=? AND position=?",
                          (state, item_id, position))
@@ -1243,6 +1455,8 @@ def update_document(item_id: str, *, position: int, state: str = '', valid_until
         conn.execute("UPDATE hermes_tingle_documents SET updated_at=? WHERE item_id=? AND position=?",
                      (now_s, item_id, position))
         conn.execute("UPDATE hermes_tingle_items SET reminder_revision=reminder_revision+1,updated_at=? WHERE id=?", (now_s, item_id))
+        if progress_changed:
+            _touch_retirement_activity(conn, item_id, now_s)
         conn.commit()
         return next(d for d in _documents(conn, item_id) if d['position'] == position)
     finally:
@@ -1275,6 +1489,7 @@ def add_requirement(item_id: str, *, text: str, must: bool = False) -> dict[str,
         conn.execute("INSERT INTO hermes_tingle_requirements (item_id,position,text,must,met,created_at,updated_at) VALUES (?,?,?,?,0,?,?)",
                      (item_id, position, text.strip(), 1 if must else 0, now_s, now_s))
         conn.execute("UPDATE hermes_tingle_items SET reminder_revision=reminder_revision+1,updated_at=? WHERE id=?", (now_s, item_id))
+        _touch_retirement_activity(conn, item_id, now_s)
         conn.commit()
         return next(r for r in _requirements(conn, item_id) if r['position'] == position)
     finally:
@@ -1288,11 +1503,14 @@ def update_requirement(item_id: str, *, position: int, text: str = '',
     item_id = resolve_item_id(item_id)
     conn = _connect()
     try:
-        row = conn.execute("SELECT 1 FROM hermes_tingle_requirements WHERE item_id=? AND position=?",
+        row = conn.execute("SELECT * FROM hermes_tingle_requirements WHERE item_id=? AND position=?",
                            (item_id, position)).fetchone()
         if row is None:
             raise ValueError(f"no requirement {position} on {item_id}")
         now_s = _now()
+        progress_changed = ((bool(text.strip()) and text.strip() != row["text"])
+                            or (must is not None and int(bool(must)) != int(row["must"]))
+                            or (met is not None and int(bool(met)) != int(row["met"])))
         if text.strip():
             conn.execute("UPDATE hermes_tingle_requirements SET text=? WHERE item_id=? AND position=?",
                          (text.strip(), item_id, position))
@@ -1305,6 +1523,8 @@ def update_requirement(item_id: str, *, position: int, text: str = '',
         conn.execute("UPDATE hermes_tingle_requirements SET updated_at=? WHERE item_id=? AND position=?",
                      (now_s, item_id, position))
         conn.execute("UPDATE hermes_tingle_items SET reminder_revision=reminder_revision+1,updated_at=? WHERE id=?", (now_s, item_id))
+        if progress_changed:
+            _touch_retirement_activity(conn, item_id, now_s)
         conn.commit()
         return next(r for r in _requirements(conn, item_id) if r['position'] == position)
     finally:
@@ -1326,6 +1546,7 @@ def add_option(item_id: str, *, name: str, detail: str = '', price_text: str = '
         conn.execute("INSERT INTO hermes_tingle_options (item_id,position,name,detail,price_text,state,note,created_at,updated_at) VALUES (?,?,?,?,?,'candidate',?,?,?)",
                      (item_id, position, name.strip(), detail or '', price_text or '', note or '', now_s, now_s))
         conn.execute("UPDATE hermes_tingle_items SET reminder_revision=reminder_revision+1,updated_at=? WHERE id=?", (now_s, item_id))
+        _touch_retirement_activity(conn, item_id, now_s)
         conn.commit()
         return next(o for o in _options(conn, item_id) if o['position'] == position)
     finally:
@@ -1341,13 +1562,17 @@ def update_option(item_id: str, *, position: int, state: str = '', detail: str =
     item_id = resolve_item_id(item_id)
     conn = _connect()
     try:
-        row = conn.execute("SELECT 1 FROM hermes_tingle_options WHERE item_id=? AND position=?",
+        row = conn.execute("SELECT * FROM hermes_tingle_options WHERE item_id=? AND position=?",
                            (item_id, position)).fetchone()
         if row is None:
             raise ValueError(f"no option {position} on {item_id}")
         if state and state not in ("candidate", "shortlisted", "rejected"):
             raise ValueError("option state must be candidate, shortlisted or rejected; 'proposed' is set only by propose_option with its approval request")
         now_s = _now()
+        progress_changed = any(
+            value and value != row[column]
+            for column, value in (("state", state), ("detail", detail), ("price_text", price_text), ("note", note))
+        )
         if state:
             conn.execute("UPDATE hermes_tingle_options SET state=? WHERE item_id=? AND position=?",
                          (state, item_id, position))
@@ -1363,6 +1588,8 @@ def update_option(item_id: str, *, position: int, state: str = '', detail: str =
         conn.execute("UPDATE hermes_tingle_options SET updated_at=? WHERE item_id=? AND position=?",
                      (now_s, item_id, position))
         conn.execute("UPDATE hermes_tingle_items SET reminder_revision=reminder_revision+1,updated_at=? WHERE id=?", (now_s, item_id))
+        if progress_changed:
+            _touch_retirement_activity(conn, item_id, now_s)
         conn.commit()
         return next(o for o in _options(conn, item_id) if o['position'] == position)
     finally:
@@ -1418,6 +1645,7 @@ def add_booking(item_id: str, *, kind: str = 'other', name: str, detail: str = '
                       cancel_dt.isoformat(timespec="seconds") if cancel_dt else None,
                       cancel_item_id, confirmation_ref or '', note or '', now_s, now_s))
         conn.execute("UPDATE hermes_tingle_items SET reminder_revision=reminder_revision+1,updated_at=? WHERE id=?", (now_s, item_id))
+        _touch_retirement_activity(conn, item_id, now_s)
         conn.commit()
         return next(b for b in _bookings(conn, item_id) if b['position'] == position)
     finally:
@@ -1458,6 +1686,14 @@ def update_booking(item_id: str, *, position: int, state: str = '', detail: str 
             linked = get_item(str(cancel_item_id))
             if linked and linked["status"] in ("open", "waiting", "blocked"):
                 complete_item(str(cancel_item_id), note="booking cancelled", now=now_s)
+        progress_changed = any(
+            value and value != booking[column]
+            for column, value in (("state", state), ("detail", detail),
+                                  ("confirmation_ref", confirmation_ref), ("note", note))
+        ) or (cancel_dt is not None and (
+            cancel_dt.isoformat(timespec="seconds") != booking.get("cancel_by")
+            or cancel_item_id != booking.get("cancel_item_id")
+        ))
         if state:
             conn.execute("UPDATE hermes_tingle_bookings SET state=? WHERE item_id=? AND position=?",
                          (state, item_id, position))
@@ -1476,6 +1712,8 @@ def update_booking(item_id: str, *, position: int, state: str = '', detail: str 
         conn.execute("UPDATE hermes_tingle_bookings SET updated_at=? WHERE item_id=? AND position=?",
                      (now_s, item_id, position))
         conn.execute("UPDATE hermes_tingle_items SET reminder_revision=reminder_revision+1,updated_at=? WHERE id=?", (now_s, item_id))
+        if progress_changed:
+            _touch_retirement_activity(conn, item_id, now_s)
         conn.commit()
         return next(b for b in _bookings(conn, item_id) if b['position'] == position)
     finally:
@@ -1508,6 +1746,7 @@ def propose_option(item_id: str, *, position: int, approver: Any = None,
         conn.execute("UPDATE hermes_tingle_options SET state='proposed', updated_at=? WHERE item_id=? AND position=?",
                      (now_s, item_id, position))
         conn.execute("UPDATE hermes_tingle_items SET reminder_revision=reminder_revision+1,updated_at=? WHERE id=?", (now_s, item_id))
+        _touch_retirement_activity(conn, item_id, now_s)
         conn.commit()
     finally:
         conn.close()
@@ -1572,6 +1811,9 @@ def add_step(goal_id: str, *, title: str, why: str, wait_item_id: str = '') -> d
                 raise ValueError('wait item is already linked or is a goal')
         position = conn.execute('SELECT COALESCE(MAX(position),0)+1 FROM hermes_tingle_steps WHERE goal_id=?', (goal_id,)).fetchone()[0]
         conn.execute('INSERT INTO hermes_tingle_steps(goal_id,position,title,why,wait_item_id) VALUES(?,?,?,?,?)', (goal_id,position,title,why,wait_item_id or None))
+        now_s = _now().isoformat(timespec='seconds')
+        conn.execute('UPDATE hermes_tingle_items SET updated_at=? WHERE id=?', (now_s, goal_id))
+        _touch_retirement_activity(conn, goal_id, now_s)
         conn.commit()
         return _steps(conn, goal_id)[-1]
     finally:
@@ -1597,6 +1839,9 @@ def complete_step(goal_id: str, position: int) -> dict[str, Any]:
         if step['resolved'] or any(not s['resolved'] for s in steps if s['position'] < position):
             raise ValueError('complete steps in order')
         conn.execute('UPDATE hermes_tingle_steps SET done=1 WHERE goal_id=? AND position=?', (goal_id,position))
+        now_s = _now().isoformat(timespec='seconds')
+        conn.execute('UPDATE hermes_tingle_items SET updated_at=? WHERE id=?', (now_s, goal_id))
+        _touch_retirement_activity(conn, goal_id, now_s)
         conn.commit()
         return next(s for s in _steps(conn, goal_id) if s['position'] == position)
     finally:
@@ -1629,6 +1874,9 @@ def skip_step(goal_id: str, position: int) -> dict[str, Any]:
         if step['skipped']:
             raise ValueError('step is already skipped')
         conn.execute('UPDATE hermes_tingle_steps SET skipped=1 WHERE goal_id=? AND position=?', (goal_id, position))
+        now_s = _now().isoformat(timespec='seconds')
+        conn.execute('UPDATE hermes_tingle_items SET updated_at=? WHERE id=?', (now_s, goal_id))
+        _touch_retirement_activity(conn, goal_id, now_s)
         conn.commit()
         return next(s for s in _steps(conn, goal_id) if s['position'] == position)
     finally:
@@ -1638,6 +1886,15 @@ def skip_step(goal_id: str, position: int) -> dict[str, Any]:
 def _guard_close(conn: sqlite3.Connection, item_id: str) -> None:
     if any(not s['resolved'] for s in _steps(conn, item_id)):
         raise ValueError('finish all goal steps before closing the goal')
+
+
+def _guard_reopen_linked(conn: sqlite3.Connection, item_id: str) -> None:
+    link = conn.execute("SELECT goal_id FROM hermes_tingle_steps WHERE wait_item_id=?", (item_id,)).fetchone()
+    if not link:
+        return
+    parent = conn.execute("SELECT status FROM hermes_tingle_items WHERE id=?", (link["goal_id"],)).fetchone()
+    if not parent or parent["status"] not in _ACTIVE_STATUSES:
+        raise ValueError("cannot reopen a linked step under a closed goal")
 
 
 def _attach_case(conn, item):
@@ -1963,6 +2220,14 @@ def _purge_source_retained(conn: sqlite3.Connection, kind: str, *, preserve_rece
         removed += conn.execute('DELETE FROM source_seen WHERE source_type=?',(kind,)).rowcount
         if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='context_review_receipts'").fetchone():
             removed += conn.execute('DELETE FROM context_review_receipts WHERE kind=?',(kind,)).rowcount
+    # Evidence identities are source-derived and can belong to any item type;
+    # clear them on every source purge because the marker intentionally stores no type.
+    conn.execute("UPDATE hermes_tingle_retirement SET evidence_key='' WHERE evidence_key<>''")
+    # A purge alone does not change a grant generation. Bump a dedicated
+    # counter so an in-flight collection's evidence fence fails closed too.
+    conn.execute(
+        """INSERT INTO plugin_meta(key,value) VALUES('retirement_evidence_epoch','1')
+           ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1""")
     if kind == "email":
         for table in ("gmail_pending_messages", "gmail_unreadable", "email_candidates"):
             removed += conn.execute(f"DELETE FROM {table}").rowcount
@@ -1979,6 +2244,8 @@ def _purge_source_retained(conn: sqlite3.Connection, kind: str, *, preserve_rece
         removed += conn.execute("DELETE FROM plugin_meta WHERE key GLOB 'gmail_*' OR key IN ('trash_review_cursor','due_review_reply_cursor')").rowcount
     elif kind == "calendar":
         removed += conn.execute("DELETE FROM source_seen WHERE source_type='calendar'").rowcount
+        removed += conn.execute("DELETE FROM calendar_transition_alerts").rowcount
+        removed += conn.execute("DELETE FROM calendar_transition_receipts").rowcount
         removed += conn.execute("DELETE FROM plugin_meta WHERE key GLOB 'calendar_*'").rowcount
     return removed
 
@@ -2253,7 +2520,7 @@ def update_item(item_id: str, **updates: Any) -> dict[str, Any]:
             value = str(value or "").strip()
             if len(value) > 1200:
                 raise ValueError("summary must be at most 1200 characters")
-        elif key == "status" and (value not in _STATUSES or value == "merged"):
+        elif key == "status" and (value not in _STATUSES or value in {"merged", "auto_closed"}):
             raise ValueError("unknown status")
         elif key == "owner" and value not in {"me", "other", "joint", "unknown"}:
             raise ValueError("unknown owner")
@@ -2290,11 +2557,26 @@ def update_item(item_id: str, **updates: Any) -> dict[str, Any]:
         if normalized.get('status') in {'done', 'dismissed'}:
             _guard_close(conn, str(item_id).upper())
         current = conn.execute(
-            "SELECT source_type,source_ref,completion_signal,status,owner,next_check_at,reminder_count,reminder_attempt_count,due_at,recur_interval,recur_unit,hard_deadline FROM hermes_tingle_items WHERE id=?",
-            (str(item_id).upper(),),
+            "SELECT * FROM hermes_tingle_items WHERE id=?", (str(item_id).upper(),)
         ).fetchone()
         if current is None:
             raise KeyError("Hermes Tingle item not found")
+        routine_fields = {
+            "next_check_at", "due_at", "recur_anchor", "reminder_count",
+            "reminder_attempt_count", "reminder_budget_uncertain", "reminder_cycle",
+            "last_notified_at", "snoozed_until", "completed_at",
+        }
+        meaningful_update = any(
+            key not in routine_fields and key in current.keys() and current[key] != value
+            for key, value in normalized.items()
+        )
+        if current["status"] == "auto_closed" and normalized.get("status") not in {"open", "waiting", "blocked", "done", "dismissed"}:
+            raise ValueError("this item was auto-closed; explicitly set an active status to reopen it")
+        if current["status"] == "auto_closed" and normalized.get("status") in _ACTIVE_STATUSES:
+            created_dt = _parse_time(current["created_at"], field="created_at")
+            if created_dt is None or now_dt >= created_dt + timedelta(days=_MAX_ITEM_AGE_DAYS):
+                raise ValueError("cannot reopen an item past its one-year tracking cap")
+            _guard_reopen_linked(conn, str(item_id).upper())
         if normalized.get("hard_deadline", current["hard_deadline"]) and not normalized.get("due_at", current["due_at"]):
             raise ValueError("a hard deadline (cancellation window) requires a due_at anchor")
         effective_interval = normalized.get("recur_interval", current["recur_interval"])
@@ -2315,6 +2597,29 @@ def update_item(item_id: str, **updates: Any) -> dict[str, Any]:
         owner = normalized.get("owner", current["owner"])
         source_type = current["source_type"]
         source_ref = str(current["source_ref"] or "")
+        reopening = current["status"] == "auto_closed" and state in _ACTIVE_STATUSES
+        if reopening:
+            if signal == "source_email_reply_received":
+                if state != "waiting" or owner != "other":
+                    raise ValueError("reopen a reply-wait as waiting on another person")
+            created_dt = _parse_time(current["created_at"], field="created_at")
+            if created_dt is None or now_dt >= created_dt + timedelta(days=_MAX_ITEM_AGE_DAYS):
+                raise ValueError("cannot reopen an item past its one-year tracking cap")
+            if signal == "source_email_checkpoint" and not normalized.get("next_check_at"):
+                try:
+                    saved_plan = json.loads(str(current["email_review_plan"] or "{}"))
+                except (TypeError, ValueError):
+                    saved_plan = {}
+                if isinstance(saved_plan, dict) and saved_plan.get("review_at"):
+                    try:
+                        normalized["next_check_at"] = _stamp(saved_plan["review_at"], field="next_check_at")
+                    except ValueError:
+                        pass  # Preserve the plan but leave an invalid check unscheduled.
+            normalized.update(
+                completed_at=None, reminder_count=0, reminder_attempt_count=0,
+                reminder_budget_uncertain=0, reminder_cycle=secrets.token_hex(16),
+                last_notified_at=None, snoozed_until=None,
+            )
         if (current['completion_signal'] == 'source_email_checkpoint'
                 and signal != 'source_email_checkpoint'):
             raise ValueError('an email checkpoint cannot bypass its source verification gate')
@@ -2356,15 +2661,60 @@ def update_item(item_id: str, **updates: Any) -> dict[str, Any]:
                 normalized['next_check_at'] = plan['review_at']
         if "next_check_at" in normalized and normalized["next_check_at"] is not None:
             normalized.update(reminder_count=0, reminder_attempt_count=0, reminder_budget_uncertain=0, reminder_cycle=secrets.token_hex(16), last_notified_at=None, snoozed_until=None)
+        if reopening and not normalized.get("next_check_at") and signal not in {"source_email_reply_received", "source_email_checkpoint"}:
+            effective_due = _parse_time(normalized.get("due_at", current["due_at"]), field="due_at") if normalized.get("due_at", current["due_at"]) else None
+            normalized["next_check_at"] = _next_check(
+                now=now_dt, due_at=effective_due, owner=owner,
+                priority=normalized.get("priority", current["priority"]), status=state,
+            ).isoformat(timespec="seconds")
+            normalized.update(reminder_count=0, reminder_attempt_count=0,
+                              reminder_budget_uncertain=0, reminder_cycle=secrets.token_hex(16))
+        if meaningful_update or "due_at" in updates:
+            effective_status = normalized.get("status", current["status"])
+            effective_owner = normalized.get("owner", current["owner"])
+            effective_due = _parse_time(normalized.get("due_at", current["due_at"]), field="due_at") if normalized.get("due_at", current["due_at"]) else None
+            retirement_class = _retirement_class(
+                due_at=effective_due, status=effective_status, owner=effective_owner,
+                hard_deadline=bool(normalized.get("hard_deadline", current["hard_deadline"])),
+                has_open_wait=_has_open_wait(conn, str(item_id).upper()),
+            )
+            created_dt = _parse_time(current["created_at"], field="created_at")
+            if created_dt is None:
+                raise ValueError("item creation time is missing; retirement cannot be calculated")
+            prior = _retirement_for(conn, str(item_id).upper())
+            last_activity_dt = now_dt if meaningful_update else (
+                _parse_time(prior["last_activity_at"], field="last_activity_at")
+                if prior and prior["last_activity_at"] else None
+            ) or created_dt
+            retire_fields = (
+                retirement_class,
+                last_activity_dt.isoformat(timespec="seconds"),
+                _auto_close_at(
+                    retirement_class=retirement_class, created_at=created_dt,
+                    last_activity_at=last_activity_dt, due_at=effective_due,
+                ).isoformat(timespec="seconds"),
+            )
+        else:
+            retire_fields = None
         conn.execute("UPDATE hermes_tingle_items SET reminder_revision=reminder_revision+1 WHERE id=?", (item_id,))
         fields = ",".join(f"{key}=?" for key in normalized)
         cur = conn.execute(f"UPDATE hermes_tingle_items SET {fields}, updated_at=? WHERE id=?", (*normalized.values(), now_s, str(item_id).upper()))
         if not cur.rowcount:
             raise KeyError("Hermes Tingle item not found")
+        if retire_fields is not None:
+            conn.execute(
+                """INSERT INTO hermes_tingle_retirement(item_id,retirement_class,last_activity_at,auto_close_at)
+                   VALUES(?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET
+                   retirement_class=excluded.retirement_class,last_activity_at=excluded.last_activity_at,
+                   auto_close_at=excluded.auto_close_at""",
+                (str(item_id).upper(), *retire_fields),
+            )
         if normalized.get('status') in ('done', 'dismissed'):
             conn.execute("UPDATE hermes_tingle_items SET email_review_plan='' WHERE id=?", (str(item_id).upper(),))
         if normalized.get("status") == "done":
             conn.execute("UPDATE hermes_tingle_items SET completed_at=? WHERE id=?", (now_s, str(item_id).upper()))
+        elif normalized.get("status") in _ACTIVE_STATUSES and current["status"] == "auto_closed":
+            conn.execute("UPDATE hermes_tingle_items SET completed_at=NULL WHERE id=?", (str(item_id).upper(),))
         conn.commit()
         return _public(conn.execute("SELECT * FROM hermes_tingle_items WHERE id=?", (str(item_id).upper(),)).fetchone())  # type: ignore[return-value]
     finally:
@@ -2383,10 +2733,18 @@ def complete_item(item_id: str, *, note: str = "", now: Any = None) -> dict[str,
         _guard_merged_member(conn,item_id)
         _guard_close(conn, str(item_id).upper())
         row = conn.execute(
-            "SELECT * FROM hermes_tingle_items WHERE id=? AND status IN ('open','waiting','blocked','missed')",
+            "SELECT * FROM hermes_tingle_items WHERE id=? AND status IN ('open','waiting','blocked','missed','auto_closed')",
             (str(item_id).upper(),),
         ).fetchone()
-        if row is not None and row["recur_interval"]:
+        recurring_eligible = bool(row is not None and row["recur_interval"])
+        if recurring_eligible:
+            created_dt = _parse_time(row["created_at"], field="created_at")
+            if created_dt is None:
+                raise ValueError("recurring item creation time is missing")
+            recurring_eligible = now_dt < created_dt + timedelta(days=_MAX_ITEM_AGE_DAYS)
+        if row is not None and row["status"] == "auto_closed" and recurring_eligible:
+            _guard_reopen_linked(conn, str(item_id).upper())
+        if row is not None and recurring_eligible:
             # Recurring obligation (FT-03): completing one occurrence records it in
             # recurrence_completions, advances the deadline calendar-aware from the
             # persisted original anchor (never from now, always at least one
@@ -2406,21 +2764,43 @@ def complete_item(item_id: str, *, note: str = "", now: Any = None) -> dict[str,
                 "INSERT INTO recurrence_completions(item_id,occurrence_due_at,completed_at,note) VALUES(?,?,?,?)",
                 (str(item_id).upper(), due_dt.isoformat(timespec="seconds"), now_s, note),
             )
+            created_dt = _parse_time(row["created_at"], field="created_at")
+            if created_dt is None:
+                raise ValueError("recurring item creation time is missing")
+            retirement_class = _retirement_class(due_at=new_due, status=row["status"],
+                                                owner=row["owner"], hard_deadline=bool(row["hard_deadline"]))
+            retirement_at = _auto_close_at(retirement_class=retirement_class, created_at=created_dt,
+                                           last_activity_at=now_dt, due_at=new_due).isoformat(timespec="seconds")
+            reopen_status = ("waiting" if (row["completion_signal"] == "source_email_reply_received"
+                                           or row["owner"] == "other") else "open")
             conn.execute(
-                """UPDATE hermes_tingle_items SET due_at=?,next_check_at=?,reminder_count=0,reminder_attempt_count=0,reminder_budget_uncertain=0,reminder_cycle=lower(hex(randomblob(16))),reminder_revision=reminder_revision+1,
-                   last_notified_at=NULL,snoozed_until=NULL,updated_at=?,
+                """UPDATE hermes_tingle_items SET status=CASE WHEN status='auto_closed' THEN ? ELSE status END,
+                   due_at=?,next_check_at=?,reminder_count=0,reminder_attempt_count=0,reminder_budget_uncertain=0,
+                   reminder_cycle=lower(hex(randomblob(16))),reminder_revision=reminder_revision+1,
+                   last_notified_at=NULL,snoozed_until=NULL,updated_at=?,completed_at=NULL,
                    summary=CASE WHEN ?='' THEN summary ELSE ? END WHERE id=?""",
-                (new_due.isoformat(timespec="seconds"), new_check.isoformat(timespec="seconds"),
+                (reopen_status, new_due.isoformat(timespec="seconds"), new_check.isoformat(timespec="seconds"),
                  now_s, note, note, str(item_id).upper()),
+            )
+            conn.execute(
+                """INSERT INTO hermes_tingle_retirement(item_id,retirement_class,last_activity_at,auto_close_at)
+                   VALUES(?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET
+                   retirement_class=excluded.retirement_class,last_activity_at=excluded.last_activity_at,
+                   auto_close_at=excluded.auto_close_at""",
+                (str(item_id).upper(), retirement_class, now_s, retirement_at),
             )
             conn.commit()
             return _public(conn.execute("SELECT * FROM hermes_tingle_items WHERE id=?", (str(item_id).upper(),)).fetchone())  # type: ignore[return-value]
         cur = conn.execute(
-            "UPDATE hermes_tingle_items SET status='done',email_review_plan='',reminder_revision=reminder_revision+1,summary=CASE WHEN ?='' THEN summary ELSE ? END,updated_at=?,completed_at=? WHERE id=? AND status IN ('open','waiting','blocked','missed')",
+            "UPDATE hermes_tingle_items SET status='done',email_review_plan='',reminder_revision=reminder_revision+1,summary=CASE WHEN ?='' THEN summary ELSE ? END,updated_at=?,completed_at=? WHERE id=? AND status IN ('open','waiting','blocked','missed','auto_closed')",
             (note, note, now_s, now_s, str(item_id).upper()),
         )
         if not cur.rowcount:
             raise KeyError("Hermes Tingle item not found or already closed")
+        wait_link = conn.execute("SELECT goal_id FROM hermes_tingle_steps WHERE wait_item_id=?", (str(item_id).upper(),)).fetchone()
+        if wait_link:
+            conn.execute("UPDATE hermes_tingle_items SET updated_at=? WHERE id=?", (now_s, wait_link["goal_id"]))
+            _touch_retirement_activity(conn, str(wait_link["goal_id"]), now_s)
         conn.commit()
         return _public(conn.execute("SELECT * FROM hermes_tingle_items WHERE id=?", (str(item_id).upper(),)).fetchone())  # type: ignore[return-value]
     finally:
@@ -2443,16 +2823,238 @@ def snooze_item(item_id: str, *, until: Any, now: Any = None) -> dict[str, Any]:
     until_s = until_dt.isoformat(timespec="seconds")
     conn = _connect()
     try:
-        cur = conn.execute(
-            """UPDATE hermes_tingle_items SET snoozed_until=?,next_check_at=?,reminder_count=0,reminder_attempt_count=0,reminder_budget_uncertain=0,reminder_cycle=lower(hex(randomblob(16))),reminder_revision=reminder_revision+1,
-               last_notified_at=NULL,updated_at=?
-               WHERE id=? AND status IN ('open','waiting','blocked','missed')""",
-            (until_s, until_s, now_s, str(item_id).upper()),
-        )
-        if not cur.rowcount:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM hermes_tingle_items WHERE id=?", (str(item_id).upper(),)).fetchone()
+        if row is None or row["status"] not in (*_ACTIVE_STATUSES, "missed", "auto_closed"):
             raise KeyError("Hermes Tingle item not found or already closed")
+        if row["status"] == "auto_closed":
+            status = ("waiting" if row["completion_signal"] == "source_email_reply_received"
+                      or row["owner"] == "other" else "open")
+            _guard_reopen_linked(conn, str(item_id).upper())
+        else:
+            status = str(row["status"])
+        due_dt = _parse_time(row["due_at"], field="due_at") if row["due_at"] else None
+        created_dt = _parse_time(row["created_at"], field="created_at")
+        if created_dt is None:
+            raise ValueError("item creation time is missing; retirement cannot be calculated")
+        if now_dt >= created_dt + timedelta(days=_MAX_ITEM_AGE_DAYS):
+            raise ValueError("cannot reopen an item past its one-year tracking cap")
+        retirement_class = _retirement_class(due_at=due_dt, status=status, owner=str(row["owner"]),
+                                             hard_deadline=bool(row["hard_deadline"]),
+                                             has_open_wait=_has_open_wait(conn, str(item_id).upper()))
+        auto_close_at = _auto_close_at(retirement_class=retirement_class, created_at=created_dt,
+                                       last_activity_at=now_dt, due_at=due_dt).isoformat(timespec="seconds")
+        conn.execute(
+            """UPDATE hermes_tingle_items SET status=?,snoozed_until=?,next_check_at=?,
+               reminder_count=0,reminder_attempt_count=0,reminder_budget_uncertain=0,
+               reminder_cycle=lower(hex(randomblob(16))),reminder_revision=reminder_revision+1,
+               last_notified_at=NULL,updated_at=?,completed_at=CASE WHEN status='auto_closed' THEN NULL ELSE completed_at END
+               WHERE id=?""",
+            (status, until_s, until_s, now_s, str(item_id).upper()),
+        )
+        conn.execute(
+            """INSERT INTO hermes_tingle_retirement(item_id,retirement_class,last_activity_at,auto_close_at)
+               VALUES(?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET
+               retirement_class=excluded.retirement_class,last_activity_at=excluded.last_activity_at,
+               auto_close_at=excluded.auto_close_at""",
+            (str(item_id).upper(), retirement_class, now_s, auto_close_at),
+        )
         conn.commit()
         return _public(conn.execute("SELECT * FROM hermes_tingle_items WHERE id=?", (str(item_id).upper(),)).fetchone())  # type: ignore[return-value]
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _evidence_epoch_value(conn: sqlite3.Connection) -> int | None:
+    row = conn.execute("SELECT value FROM plugin_meta WHERE key='retirement_evidence_epoch'").fetchone()
+    return int(row[0]) if row else 0
+
+
+def source_epoch_snapshot() -> dict[str, int | None]:
+    """Opaque per-source grant epochs and purge counter for evidence writes."""
+    conn = _connect()
+    try:
+        result = {row["kind"]: (int(row["generation"]) if row["generation"] is not None else None)
+                  for row in conn.execute("SELECT kind,generation FROM hermes_tingle_source_optins")}
+        result["purge"] = _evidence_epoch_value(conn)
+        return result
+    finally:
+        conn.close()
+
+
+def _source_epoch_matches(conn: sqlite3.Connection, expected: dict[str, int | None] | None) -> bool:
+    if expected is None:
+        return True
+    current = {row["kind"]: (int(row["generation"]) if row["generation"] is not None else None)
+               for row in conn.execute("SELECT kind,generation FROM hermes_tingle_source_optins")}
+    current["purge"] = _evidence_epoch_value(conn)
+    return current == expected
+
+
+@serialized("reminders")
+def auto_close_stale_items(*, now: Any = None, protected_ids: Iterable[str] = (),
+                           protected_evidence: dict[str, str] | None = None,
+                           allow_soft_close: bool = True,
+                           source_epoch: dict[str, int | None] | None = None) -> list[str]:
+    """Backfill retirement policy and atomically retire eligible items.
+
+    The caller runs this only after a daily review. Incomplete source coverage may
+    backfill dates but cannot soft-close; the absolute one-year cap always applies.
+    All classes and close decisions are computed from one pre-sweep snapshot.
+    Linked waits never remain active under a closed parent: a parent reaching its
+    hard cap closes its linked waits in the same transaction. Source-derived
+    evidence is ignored when the grant epoch changed during collection, so a
+    concurrent revoke/purge cannot be undone by a stale snapshot.
+    """
+    now_dt = _now(now)
+    now_s = now_dt.isoformat(timespec="seconds")
+    protected = {str(item_id).upper() for item_id in protected_ids if isinstance(item_id, str)}
+    evidence = {str(key).upper(): str(value)[:128] for key, value in (protected_evidence or {}).items()}
+    active_sql = ",".join("?" for _ in (*_ACTIVE_STATUSES, "missed"))
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        # Check the grant epoch in the same write transaction that persists the
+        # evidence marker: a revoke/purge cannot interleave between check and write.
+        if not _source_epoch_matches(conn, source_epoch):
+            protected, evidence, allow_soft_close = set(), {}, False
+        rows = conn.execute(
+            f"""SELECT i.*,r.retirement_class AS policy_class,
+                      r.last_activity_at AS policy_last_activity_at,
+                      r.auto_close_at AS policy_auto_close_at,
+                      COALESCE(r.evidence_key,'') AS policy_evidence_key
+               FROM hermes_tingle_items i
+               LEFT JOIN hermes_tingle_retirement r ON r.item_id=i.id
+               WHERE i.status IN ({active_sql}) ORDER BY i.id""",
+            (*_ACTIVE_STATUSES, "missed"),
+        ).fetchall()
+        active_ids = {str(row["id"]).upper() for row in rows}
+        link_rows = conn.execute(
+            """SELECT s.goal_id,s.wait_item_id FROM hermes_tingle_steps s
+               JOIN hermes_tingle_items w ON w.id=s.wait_item_id
+               WHERE COALESCE(s.skipped,0)=0 AND COALESCE(s.done,0)=0
+                 AND w.completion_signal='source_email_reply_received'
+                 AND w.status IN ('open','waiting','blocked','missed')"""
+        ).fetchall()
+        parent_waits: dict[str, list[str]] = {}
+        for link in link_rows:
+            parent_id, wait_id = str(link["goal_id"]).upper(), str(link["wait_item_id"]).upper()
+            if parent_id in active_ids and wait_id in active_ids:
+                parent_waits.setdefault(parent_id, []).append(wait_id)
+        decisions: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                created_at = _parse_time(row["created_at"], field="created_at")
+                if created_at is None:
+                    continue
+                due_dt = _parse_time(row["due_at"], field="due_at") if row["due_at"] else None
+                last_activity = ((_parse_time(row["policy_last_activity_at"], field="last_activity_at")
+                                  if row["policy_last_activity_at"] else None) or created_at)
+            except ValueError:
+                continue
+            item_id = str(row["id"]).upper()
+            retirement_class = _retirement_class(
+                due_at=due_dt, status=str(row["status"]), owner=str(row["owner"]),
+                hard_deadline=bool(row["hard_deadline"]), has_open_wait=item_id in parent_waits,
+            )
+            close_at = _auto_close_at(retirement_class=retirement_class, created_at=created_at,
+                                      last_activity_at=last_activity, due_at=due_dt)
+            key = evidence.get(item_id) if item_id in protected else None
+            seen_bits = _decode_retirement_evidence(row["policy_evidence_key"])
+            if key:
+                seen_before, evidence_key = _remember_retirement_evidence(seen_bits, key)
+                new_evidence = not seen_before
+            else:
+                new_evidence = False
+                evidence_key = str(row["policy_evidence_key"] or "")
+            at_hard_cap = now_dt >= created_at + timedelta(days=_MAX_ITEM_AGE_DAYS)
+            leash_elapsed = now_dt >= close_at
+            enough_deadline_reminders = (
+                retirement_class != "deadline"
+                or int(row["reminder_attempt_count"] or 0) >= _DEADLINE_REMINDERS_BEFORE_CLOSE
+            )
+            decisions.append({
+                "id": item_id,
+                "row": row,
+                "retirement_class": retirement_class,
+                "last_activity_at": last_activity.isoformat(timespec="seconds"),
+                "auto_close_at": close_at.isoformat(timespec="seconds"),
+                "evidence_key": evidence_key,
+                "hard_cap": at_hard_cap,
+                "close": at_hard_cap or (allow_soft_close and leash_elapsed
+                                          and enough_deadline_reminders and not new_evidence),
+            })
+        forced_close_ids: set[str] = set()
+        by_id = {decision["id"]: decision for decision in decisions}
+        for parent_id, wait_ids in parent_waits.items():
+            parent = by_id.get(parent_id)
+            if parent is None or not parent["close"]:
+                continue
+            open_waits = [by_id.get(wait_id) for wait_id in wait_ids]
+            still_open = [wait for wait in open_waits if wait is None or not wait["close"]]
+            if not still_open:
+                continue
+            if parent["hard_cap"]:
+                # The parent's absolute age cap also bounds its dependent waits.
+                for wait_id, wait in zip(wait_ids, open_waits):
+                    if wait is not None and not wait["close"]:
+                        wait["close"] = True
+                    elif wait is None:
+                        forced_close_ids.add(wait_id)
+            else:
+                # Never leave an active dependency under a softly retired goal.
+                parent["close"] = False
+        closed: list[str] = []
+        for decision in decisions:
+            item_id = decision["id"]
+            conn.execute(
+                """INSERT INTO hermes_tingle_retirement
+                   (item_id,retirement_class,last_activity_at,auto_close_at,evidence_key)
+                   VALUES(?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET
+                   retirement_class=excluded.retirement_class,
+                   last_activity_at=excluded.last_activity_at,
+                   auto_close_at=excluded.auto_close_at,
+                   evidence_key=excluded.evidence_key""",
+                (item_id, decision["retirement_class"], decision["last_activity_at"],
+                 decision["auto_close_at"], "" if decision["close"] else decision["evidence_key"]),
+            )
+            if not decision["close"]:
+                continue
+            result = conn.execute(
+                """UPDATE hermes_tingle_items
+                   SET status='auto_closed',next_check_at=NULL,snoozed_until=NULL,
+                       reminder_count=0,reminder_attempt_count=0,reminder_budget_uncertain=0,
+                       reminder_revision=reminder_revision+1,updated_at=?,completed_at=?
+                   WHERE id=? AND status IN (""" + active_sql + ")",
+                (now_s, now_s, item_id, *_ACTIVE_STATUSES, "missed"),
+            )
+            if result.rowcount:
+                closed.append(item_id)
+        for wait_id in sorted(forced_close_ids):
+            result = conn.execute(
+                """UPDATE hermes_tingle_items
+                   SET status='auto_closed',next_check_at=NULL,snoozed_until=NULL,
+                       reminder_count=0,reminder_attempt_count=0,reminder_budget_uncertain=0,
+                       reminder_revision=reminder_revision+1,updated_at=?,completed_at=?
+                   WHERE id=? AND status IN (""" + active_sql + ")",
+                (now_s, now_s, wait_id, *_ACTIVE_STATUSES, "missed"),
+            )
+            if result.rowcount:
+                conn.execute(
+                    """INSERT OR IGNORE INTO hermes_tingle_retirement
+                       (item_id,retirement_class,last_activity_at,auto_close_at,evidence_key)
+                       VALUES(?,'wait',NULL,NULL,'')""",
+                    (wait_id,),
+                )
+                closed.append(wait_id)
+        conn.commit()
+        return closed
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -2813,7 +3415,8 @@ def _onboarding_fingerprint(conn, item_id):
     row = conn.execute('SELECT * FROM hermes_tingle_items WHERE id=?', (item_id,)).fetchone()
     if row is None:
         return None
-    data = {'item': dict(row)}
+    item = dict(row)
+    data = {'item': item}
     for table, column in _ONBOARDING_CHILDREN:
         data[table] = [dict(r) for r in conn.execute(
             f'SELECT * FROM {table} WHERE {column}=? ORDER BY rowid', (item_id,))]
@@ -2836,6 +3439,7 @@ def _delete_untouched_imports(conn, item_ids, expected_origin):
             continue
         for table, column in _ONBOARDING_CHILDREN:
             conn.execute(f'DELETE FROM {table} WHERE {column}=?', (item_id,))
+        conn.execute('DELETE FROM hermes_tingle_retirement WHERE item_id=?', (item_id,))
         conn.execute('DELETE FROM hermes_tingle_items WHERE id=?', (item_id,))
         conn.execute("UPDATE onboarding_item_journal SET state='removed' WHERE item_id=?", (item_id,))
         removed.append(item_id)
@@ -2954,6 +3558,155 @@ def mark_source_reviewed(source_type: str, source_id: str, source_version: str =
     except SourceOptInRevoked:
         conn.rollback()
         return False
+    finally:
+        conn.close()
+
+
+
+def _calendar_transition_pair_key(events: list[dict[str, Any]], pair: dict[str, Any], generation: int) -> str:
+    identities = []
+    for field in ("from_event", "to_event"):
+        index = pair.get(field)
+        if type(index) is not int or not 0 <= index < len(events):
+            raise ValueError("invalid calendar transition pair")
+        event = events[index]
+        event_generation = event.get("source_generation")
+        if event_generation is not None and event_generation != generation:
+            raise ValueError("stale calendar event generation")
+        source_id = str(event.get("source_id", "")).strip()
+        if not source_id:
+            raise ValueError("calendar transition source ID missing")
+        identities.append({
+            "source_id": source_id,
+            "source_version": str(event.get("source_version", "")),
+            "start": str(event.get("start", "")),
+            "end": str(event.get("end", "")),
+            "unconfirmed": bool(event.get("unconfirmed", False)),
+        })
+    identities.sort(key=lambda value: (value["source_id"], value["source_version"], value["start"], value["end"]))
+    payload = json.dumps({"generation": generation, "events": identities}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(b"hermes-tingle-calendar-transition-v1\0" + payload.encode("utf-8")).hexdigest()
+
+
+@serialized("sources")
+def prepare_calendar_transition_pairs(
+    events: list[dict[str, Any]], pairs: list[dict[str, Any]], *,
+    source_generation: int, expected_policy_key: str | None = None, now: Any = None,
+) -> dict[str, Any]:
+    """Attach one-run receipts; persist only pair hashes and suppress unchanged alerted pairs."""
+    now_dt = _now(now)
+    now_s = now_dt.isoformat(timespec="seconds")
+    if type(source_generation) is not int:
+        raise ValueError("calendar source generation is required")
+    policy_key = expected_policy_key or source_policy_key()
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _require_source(conn, "calendar")
+        grant = conn.execute("SELECT generation FROM hermes_tingle_source_optins WHERE kind='calendar'").fetchone()
+        if not grant or grant[0] != source_generation:
+            raise ValueError("stale calendar generation; scan again before preparing transition receipts")
+        conn.execute("DELETE FROM calendar_transition_receipts WHERE expires_at<=?", (now_s,))
+        conn.execute("DELETE FROM calendar_transition_alerts WHERE alerted_at<?", ((now_dt - timedelta(days=30)).isoformat(timespec="seconds"),))
+        if source_policy_key() != policy_key:
+            conn.commit()
+            return {"events": events, "pairs": [dict(pair, source_generation=source_generation, receipt_unavailable=True) for pair in pairs],
+                    "suppressed_pair_count": 0, "untracked_pair_count": len(pairs)}
+        kept_pairs: list[dict[str, Any]] = []
+        kept_indices: set[int] = set()
+        suppressed = 0
+        untracked = 0
+        for pair in pairs:
+            try:
+                key = _calendar_transition_pair_key(events, pair, source_generation)
+            except (TypeError, ValueError):
+                valid_indices = [index for index in (pair.get("from_event"), pair.get("to_event"))
+                                 if type(index) is int and 0 <= index < len(events)]
+                untracked += 1
+                if len(valid_indices) == 2:
+                    kept_pairs.append(dict(pair, source_generation=source_generation, receipt_unavailable=True))
+                    kept_indices.update(valid_indices)
+                continue
+            alerted = conn.execute("SELECT 1 FROM calendar_transition_alerts WHERE pair_key=?", (key,)).fetchone()
+            if alerted:
+                suppressed += 1
+                conn.execute("DELETE FROM calendar_transition_receipts WHERE pair_key=?", (key,))
+                continue
+            receipt = secrets.token_urlsafe(24)
+            receipt_hash = hashlib.sha256(receipt.encode("ascii")).hexdigest()
+            conn.execute("DELETE FROM calendar_transition_receipts WHERE pair_key=?", (key,))
+            conn.execute(
+                "INSERT INTO calendar_transition_receipts(receipt_hash,pair_key,source_generation,policy_key,expires_at) VALUES(?,?,?,?,?)",
+                (receipt_hash, key, source_generation, policy_key, (now_dt + timedelta(hours=24)).isoformat(timespec="seconds")),
+            )
+            decorated = dict(pair)
+            decorated.update({"source_generation": source_generation, "transition_receipt": receipt, "already_alerted": False})
+            kept_pairs.append(decorated)
+            kept_indices.update((pair["from_event"], pair["to_event"]))
+        ordered = sorted(kept_indices)
+        remap = {old: new for new, old in enumerate(ordered)}
+        for pair in kept_pairs:
+            if "from_event" in pair and "to_event" in pair:
+                pair["from_event"] = remap[pair["from_event"]]
+                pair["to_event"] = remap[pair["to_event"]]
+        if source_policy_key() != policy_key:
+            conn.rollback()
+            return {"events": events, "pairs": [dict(pair, source_generation=source_generation, receipt_unavailable=True) for pair in pairs],
+                    "suppressed_pair_count": 0, "untracked_pair_count": len(pairs)}
+        conn.commit()
+        return {
+            "events": [events[index] for index in ordered],
+            "pairs": kept_pairs,
+            "suppressed_pair_count": suppressed,
+            "untracked_pair_count": untracked,
+        }
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@serialized("sources")
+def mark_calendar_transition_alerted(transition_receipt: str, *, source_generation: int, now: Any = None) -> bool:
+    """Consume a fresh scan receipt and suppress that exact event-pair/version for 30 days."""
+    if not source_enabled("calendar"):
+        raise ValueError("calendar source is disabled; transition alert was not marked")
+    token = str(transition_receipt or "").strip()
+    if len(token) < 20 or len(token) > 128 or any(ch.isspace() for ch in token):
+        raise ValueError("invalid calendar transition receipt")
+    if type(source_generation) is not int:
+        raise ValueError("calendar source_generation is required")
+    now_dt = _now(now)
+    now_s = now_dt.isoformat(timespec="seconds")
+    policy_key = source_policy_key()
+    receipt_hash = hashlib.sha256(token.encode("ascii", errors="strict")).hexdigest()
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _require_source(conn, "calendar")
+        grant = conn.execute("SELECT generation FROM hermes_tingle_source_optins WHERE kind='calendar'").fetchone()
+        row = conn.execute(
+            "SELECT pair_key,source_generation,policy_key,expires_at FROM calendar_transition_receipts WHERE receipt_hash=?",
+            (receipt_hash,),
+        ).fetchone()
+        if (not grant or grant[0] != source_generation or not row
+                or row["source_generation"] != source_generation
+                or row["policy_key"] != policy_key
+                or row["expires_at"] <= now_s):
+            raise ValueError("calendar transition receipt is stale or unavailable; no marker was written")
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO calendar_transition_alerts(pair_key,alerted_at) VALUES(?,?)",
+            (row["pair_key"], now_s),
+        )
+        conn.execute("DELETE FROM calendar_transition_receipts WHERE receipt_hash=?", (receipt_hash,))
+        if source_policy_key() != policy_key:
+            raise ValueError("calendar policy changed during alert mark; no marker was written")
+        conn.commit()
+        return bool(cur.rowcount)
+    except BaseException:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
