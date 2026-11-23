@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.10 - keep owner-default setup usable across replies
+
+- The setup wizard's own `.tingle-resources.json` is no longer mistaken for evidence of a prior install; it is created on the first typed answer. Genuine prior state still blocks automatic defaults. Added a full-path regression through destination selection, subsequent reply, cancellation and restart.
+- Local verification: **2,716 passed, 30 skipped** in the standalone test environment; privacy gate passed. CI will run on the exact pull-request head.
+
 ## 0.9.9 - harden automatic owner defaulting
 
 - Fresh-profile owner lookup now parses the profile config with Hermes's own YAML policy (`hermes_yaml`), not a hand-rolled scanner. Nested mappings, duplicate keys and invalid documents fail closed instead of admitting a different owner.

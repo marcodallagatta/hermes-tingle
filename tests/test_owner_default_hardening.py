@@ -1,4 +1,5 @@
 """Hardening for automatic owner defaulting: real YAML, Telegram-only, genuinely fresh data."""
+import json
 import sqlite3
 from types import SimpleNamespace
 
@@ -63,6 +64,20 @@ def _write_db(db, statements):
         conn.execute(statement)
     conn.commit()
     conn.close()
+
+
+def test_auto_owner_draft_survives_later_replies_and_restart(guided):  # noqa: F811
+    home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
+    first = ctx.command('setup', source=source)
+    assert '/tingle setup destination' in first
+    second = ctx.command('setup destination here', source=source)
+    assert '/tingle setup timezone' in second
+    state = json.loads((data / 'setup-state.json').read_text())
+    assert state['policy']['delivery'] == 'telegram:42'
+    # A discarded draft must not make fresh onboarding impossible.
+    ctx.command('setup cancel', source=source)
+    restarted = ctx.command('setup', source=source)
+    assert '/tingle setup destination' in restarted
 
 
 def test_prior_tracked_item_blocks_automatic_bootstrap(guided):  # noqa: F811

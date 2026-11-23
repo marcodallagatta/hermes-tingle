@@ -1,7 +1,7 @@
 ---
 name: usage
 description: Hermes Tingle commitment tracking and follow-up. Use whenever the owner mentions Tingle, a commitment, reminder, follow-up, waiting on a reply, or merging duplicate reminders.
-version: 0.9.9
+version: 0.9.10
 author: Hermes Tingle contributors
 license: MIT
 platforms: [linux]

@@ -71,8 +71,10 @@ def _prior_tingle_state(home):
     """Distinguish an old install from admitted-chat metadata in a new DB."""
     if (home / 'hermes-tingle.json').exists() or list(home.glob('.tingle-policy-backup-*')):
         return True
-    if (home / '.tingle-resources.json').exists() or (home / '.tingle-removal-recovery').exists():
+    if (home / '.tingle-removal-recovery').exists():
         return True
+    # The setup wizard's own .tingle-resources.json records setup-state.json on
+    # the first reply, so its existence alone is not prior install state.
     for namespace in ('hermes-tingle-lookback', 'hermes-tingle-body-audit'):
         root = home / 'plugin-data' / namespace
         try:
