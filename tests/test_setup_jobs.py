@@ -36,6 +36,10 @@ def test_fresh_setup_docs_use_typed_source_choices():
     for relative in ("README.md", "docs/installation.md", "docs/beta-setup.md",
                      "docs/onboarding.md"):
         assert "/tingle source enable <kind>" in (root / relative).read_text(encoding="utf-8")
+    installation = (root / "docs/installation.md").read_text(encoding="utf-8")
+    assert "hermes -p <profile> tools enable --platform telegram hermes_tingle" in installation
+    assert "fresh session or after `/reset`" in installation
+    assert "A saved platform list may intentionally omit a known plugin toolset" in installation
 
 
 def test_docs_state_approvals_are_record_only_and_no_external_messaging():
