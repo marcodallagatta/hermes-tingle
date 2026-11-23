@@ -134,7 +134,8 @@ def inventory(home, api=None):
         relevant=entry is not None or display_name in ('Tingle daily review','Tingle nudges','[SA] Hermes Tingle daily review','[S] Hermes Tingle deadline nudges') or Path(str(job.get('script') or '')).name in HELPERS
         if relevant:
             definition=resources.job_definition(job)
-            jobs.append({'id':job['id'],'definition':definition,'ownership':'created' if entry and entry.get('definition')==definition else 'needs explicit adoption',
+            owned=bool(entry and resources.job_definition_matches(entry.get('definition'),job))
+            jobs.append({'id':job['id'],'definition':definition,'ownership':'created' if owned else 'needs explicit adoption',
                          'busy':bool(job.get('fire_claim') or job.get('run_claim')),
                          'cleanup':'manual Hermes Cron removal required'})
     plan={'home':str(home),'resources':found,'jobs':jobs,'manifest':manifest,'plugin_installed':plugin_installed,

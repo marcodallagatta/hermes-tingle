@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.5 - clarify unadded suggestions
+
+- Daily-review reports now identify actionable leads not added in the current review and invite the owner to reply if they want them tracked. The wording avoids claiming a lead is globally absent based only on bounded context; automatic tracking rules remain unchanged.
+- Added owner-DM `/tingle setup refresh-review` to prepare an operator-only helper command for existing profiles. Chat makes no Cron changes; the helper refuses paused/unscheduled jobs and a profile name that does not resolve to the explicit profile home, requires exact confirmation, saves the old prompt to a private mode-0600 scratch backup, applies through `hermes cron edit`, verifies the prompt and job state, and reconciles Tingle ownership metadata when the prior record matches. Legacy ownership records are recognized only when newly tracked Cron fields remain at their defaults. It does not run the review. The full prompt is passed in CLI arguments, so the operator must use a trusted host where other local users cannot inspect process arguments and avoid concurrent edits to that Cron job. Scratch backups are outside Tingle removal inventory and Hermes scratch cleanup may prune them after roughly 24 hours.
+- Local verification on Python 3.14: **2,691 passed, 30 skipped, 243 deprecation warnings**; privacy gate passed. GitHub checks will run on the pull request head.
+
 ## 0.9.4 - automatic retirement for stale follow-ups
 
 - Store a deterministic retirement class/date on new active items. Deadline items retire 7 days after due once at least three reminder attempts were reserved; waits on another actor retire after 270 inactive days; other undated work after 90 inactive days; an absolute 365-day cap applies from creation.

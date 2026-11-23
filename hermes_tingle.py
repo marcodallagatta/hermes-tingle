@@ -27,7 +27,7 @@ _RELATIVE_RE = re.compile(r"^(\d{1,3})(m|h|d|w)$", re.IGNORECASE)
 # child still serving old code must keep reporting its old version, so the
 # owner can see from chat whether a restart is still needed. Bump it together
 # with plugin.yaml on every meaningful batch (a test guards the match).
-VERSION = "0.9.4"
+VERSION = "0.9.5"
 
 
 def _json(payload: dict[str, Any]) -> str:
@@ -912,7 +912,7 @@ def handle_command(ctx: Any, raw_args: str, source: Any = None, **kwargs: Any) -
                 "• `/tingle skip HT-ABC123 2` - skip one goal step\n"
                 "• `/tingle ack <receipt>` - confirm a reminder batch you received\n"
                 "• `/tingle timing HT-ID` - private timing details; `/tingle debug` - opt-in local counts\n"
-                "• `/tingle setup` - review and schedule automation\n"
+                "• `/tingle setup` - review and schedule automation; `/tingle setup refresh-review` - prepare a manual prompt refresh for an existing daily review (owner DM)\n"
                 "• `/tingle evaluation status|enable|disable` - default-off private discovery consent, owner DM only\n\n"
                 "Approval requests for future actions:\n"
                 "• `/tingle approvals` lists pending requests; `/tingle approve AR-1A2B3C` or `/tingle reject AR-1A2B3C` decides one\n\n"

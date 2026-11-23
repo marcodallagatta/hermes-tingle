@@ -38,6 +38,15 @@ def test_fresh_setup_docs_use_typed_source_choices():
         assert "/tingle source enable <kind>" in (root / relative).read_text(encoding="utf-8")
 
 
+def test_existing_installation_prompt_refresh_is_documented():
+    root = Path(__file__).resolve().parents[1]
+    doc = (root / "docs" / "installation.md").read_text(encoding="utf-8")
+    usage = (root / "skills" / "usage" / "SKILL.md").read_text(encoding="utf-8")
+    assert "/tingle setup refresh-review" in doc
+    assert "does not run the review" in doc
+    assert "/tingle setup refresh-review" in usage
+
+
 def test_docs_state_approvals_are_record_only_and_no_external_messaging():
     root = Path(__file__).resolve().parents[1]
     readme = (root / "README.md").read_text(encoding="utf-8")
@@ -406,6 +415,99 @@ def test_review_prompt_preserves_independent_reply_waits(tmp_path):
     prompt = setup_jobs.job_specs(tmp_path)[0]['prompt']
     assert 'A linked reply-wait remains independently due' in prompt
     assert 'never complete the broader goal based on a reply alone' in prompt
+
+
+def test_review_prompt_labels_suggestions_not_added_this_run_without_claiming_global_absence(tmp_path):
+    prompt = setup_jobs.job_specs(tmp_path)[0]['prompt']
+    assert 'Not added to Tingle in this review' in prompt
+    assert 'Reply if you want me to track it' in prompt
+    assert 'Never use this label for a tracked item you are reminding or updating' in prompt
+    assert 'Do not claim the suggestion is absent from Tingle based only on its absence from bounded context' in prompt
+    assert 'Only call it tracked when a matching active item ID is in supplied context' in prompt
+    assert 'reuse a matching active item instead of creating a duplicate' in prompt
+
+
+@pytest.mark.parametrize('job_name', [setup_jobs.DAILY_NAME, setup_jobs.LEGACY_DAILY_NAME])
+def test_refresh_review_command_prepares_operator_only_update(job_name, tmp_path, synthetic_settings, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    config = tmp_path / 'hermes-tingle.json'
+    config.write_text(json.dumps({**synthetic_settings, 'owner_principals':['telegram:42']}))
+    source = SimpleNamespace(platform='telegram', user_id='42', chat_id='42', chat_type='dm', is_bot=False)
+
+    class Context:
+        def __init__(self):
+            self.calls = []
+            self.job = {'id':'review-1','name':job_name,'script':'hermes_tingle_snapshot.py',
+                        'prompt':'Existing customized prompt.', 'enabled':True,
+                        'next_run_at':'2026-11-24T09:00:00+01:00',
+                        'enabled_toolsets':['hermes_tingle','web','no_mcp']}
+        def dispatch_tool(self, name, payload):
+            self.calls.append(copy.deepcopy(payload))
+            assert payload['action']=='list'
+            return {'success':True,'count':1,'jobs':[{'job_id':'review-1','name':job_name}]}
+        def read_job(self, job_id):
+            return copy.deepcopy(self.job) if job_id=='review-1' else None
+        def ask_choice(self, *args):
+            raise AssertionError('The DM command must not edit or confirm the Cron job')
+
+    ctx = Context()
+    monkeypatch.setattr(setup_jobs, '_cron_api', lambda: (fake_schedule, ctx.read_job))
+    result = setup_jobs.refresh_review_prompt_from_command(ctx, source)
+    assert 'No changes were made here' in result
+    assert 'refresh_review_prompt.py' in result and '--job-id' in result and 'review-1' in result
+    assert '--profile' in result and 'default' in result and '--apply' in result
+    assert 'hermes cron edit' in result
+    assert 'Hermes OS user' in result and '`marco`' not in result
+    assert 'cannot inspect process arguments' in result
+    assert [call['action'] for call in ctx.calls] == ['list']
+
+
+def test_saved_review_prompt_refresh_is_idempotent(tmp_path, synthetic_settings, monkeypatch):
+    import hermes_tingle
+    monkeypatch.setattr(hermes_tingle, '_source_sender_error', lambda *a, **k: None)
+    class Context:
+        def __init__(self):
+            self.jobs={'review-1': {'id':'review-1','name':setup_jobs.DAILY_NAME,
+                'script':'hermes_tingle_snapshot.py','prompt':'Saved prompt'+setup_jobs.REVIEW_PROMPT_REFRESH,
+                'enabled':True,'next_run_at':'2026-11-24T09:00:00+01:00',
+                'enabled_toolsets':['hermes_tingle','web','no_mcp']}}
+            self.asked=False
+        def dispatch_tool(self, name, payload):
+            assert payload['action']=='list'
+            return {'success':True,'count':1,'jobs':[{'job_id':'review-1','name':setup_jobs.DAILY_NAME}]}
+        def read_job(self, jid): return copy.deepcopy(self.jobs.get(jid))
+        def ask_choice(self, *_): self.asked=True; return 'update'
+    ctx=Context()
+    monkeypatch.setattr(setup_jobs, '_cron_api', lambda: (fake_schedule, ctx.read_job))
+    result=setup_jobs.refresh_review_prompt_from_command(ctx, object())
+    assert 'already includes this wording' in result
+    assert not ctx.asked
+
+
+@pytest.mark.parametrize('source', [
+    type('Sender', (), {'platform':'telegram','user_id':'42','chat_id':'-10077','chat_type':'supergroup','is_bot':False})(),
+    type('Sender', (), {'platform':'telegram','user_id':'99','chat_id':'99','chat_type':'dm','is_bot':False})(),
+])
+def test_saved_review_prompt_refresh_rejects_unverified_sender_before_cron_read(monkeypatch, tmp_path, synthetic_settings, source):
+    import json
+    config = tmp_path / 'hermes-tingle.json'
+    config.write_text(json.dumps({**synthetic_settings, 'owner_principals':['telegram:42']}))
+    class NoAccess:
+        def dispatch_tool(self, *args): raise AssertionError('Cron must not be read')
+        def ask_choice(self, *args): raise AssertionError('No choice may be shown')
+    result=setup_jobs.refresh_review_prompt_from_command(NoAccess(), source)
+    assert ('verified direct message' in result or 'not a configured owner principal' in result)
+    assert 'Nothing changed' in result or 'nothing changed' in result
+
+
+def test_daily_prompt_refresh_guidance_is_separated_from_coverage_guidance(tmp_path):
+    prompt = setup_jobs.job_specs(tmp_path)[0]["prompt"]
+    marker = setup_jobs.REVIEW_PROMPT_REFRESH_MARKER
+    assert marker in prompt
+    marker_end = prompt.index(marker) + len(marker)
+    coverage_start = prompt.index("Report material source errors or coverage gaps")
+    assert prompt[marker_end:coverage_start].endswith("\n\n")
 
 
 def test_review_prompt_applies_owner_nudge_calibration(tmp_path, synthetic_settings):

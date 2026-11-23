@@ -190,6 +190,16 @@ def handle(ctx, raw, source):
             _active_profiles.pop(binding, None)
             return 'Setup stopped: active profile changed. Start /tingle setup again; no policy, sources or jobs changed.'
         resources.safe(data_dir, home)
+        if field == 'refresh-review' and not value:
+            if state_path.exists():
+                return 'A setup draft is active; finish or cancel it before refreshing the review prompt. Nothing changed.'
+            if snapshot(home) is None:
+                return 'No valid Tingle profile setup is available for this refresh. Nothing changed.'
+            try:
+                load_settings(home)
+            except ValueError:
+                return PROVISIONING
+            return setup_jobs.refresh_review_prompt_from_command(ctx, source)
         # A draft must be checked before valid-policy activation: a policy appearing
         # mid-flow is a stale flow, not permission to skip to job creation.
         if state_path.exists():

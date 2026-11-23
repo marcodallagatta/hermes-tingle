@@ -66,7 +66,62 @@ def mutate_at_final_quiescence(monkeypatch,change):
     monkeypatch.setattr(removal,'verify_quiescent',verify)
 
 
+def test_prompt_refresh_updates_only_exact_previously_owned_job_record(tmp_path):
+    before = {
+        'id':'review-1', 'name':'Tingle daily review', 'prompt':'old prompt',
+        'script':'hermes_tingle_snapshot.py', 'schedule':'0 9 * * *',
+        'timezone':'Europe/Berlin', 'enabled':True, 'deliver':'telegram:42',
+    }
+    after = {**before, 'prompt':'new prompt'}
+    resources.record_job(tmp_path, before)
+    assert resources.refresh_recorded_job(tmp_path, before, after) is True
+    stored = resources.read(tmp_path)['jobs']['review-1']['definition']
+    assert stored == resources.job_definition(after)
+
+
+def test_prompt_refresh_does_not_adopt_or_overwrite_drifted_job_record(tmp_path):
+    before = {'id':'review-1', 'name':'Tingle daily review', 'prompt':'old prompt'}
+    after = {**before, 'prompt':'new prompt'}
+    resources.record_job(tmp_path, before)
+    changed = {**before, 'schedule':'0 10 * * *'}
+    resources.record_job(tmp_path, changed)
+    drifted = resources.read(tmp_path)['jobs']['review-1']['definition']
+    assert resources.refresh_recorded_job(tmp_path, before, after) is False
+    assert resources.read(tmp_path)['jobs']['review-1']['definition'] == drifted
+    unowned = {'id':'external-job', 'name':'Tingle daily review', 'prompt':'old prompt'}
+    assert resources.refresh_recorded_job(tmp_path, unowned, {**unowned, 'prompt':'new prompt'}) is False
+
+
+def test_prompt_refresh_does_not_adopt_legacy_job_record_missing_authored_fields(tmp_path):
+    before = {'id':'review-1','name':'Tingle daily review','prompt':'old',
+              'wrap_response':False,'repeat':{'times':None,'completed':3}}
+    after = {**before,'prompt':'new'}
+    resources.record_job(tmp_path,before)
+    manifest=resources.read(tmp_path)
+    definition=manifest['jobs']['review-1']['definition']
+    definition.pop('wrap_response')
+    definition.pop('repeat_times')
+    resources.write(tmp_path,manifest)
+    assert resources.refresh_recorded_job(tmp_path,before,after) is False
+    assert resources.read(tmp_path)['jobs']['review-1']['definition']==definition
+
+
+def test_prompt_refresh_migrates_legacy_owned_job_record_when_new_fields_are_default(tmp_path):
+    before = {'id':'review-1','name':'Tingle daily review','prompt':'old',
+              'wrap_response':None,'repeat':{'times':None,'completed':3}}
+    after = {**before,'prompt':'new'}
+    resources.record_job(tmp_path,before)
+    manifest=resources.read(tmp_path)
+    definition=manifest['jobs']['review-1']['definition']
+    definition.pop('wrap_response')
+    definition.pop('repeat_times')
+    resources.write(tmp_path,manifest)
+    assert resources.refresh_recorded_job(tmp_path,before,after) is True
+    assert resources.read(tmp_path)['jobs']['review-1']['definition']==resources.job_definition(after)
+
+
 def test_removal_refuses_when_tingle_cron_jobs_remain_before_any_cleanup(fixture):
+
     home,jobs,api,calls=fixture
     plan=removal.inventory(home,api)
     before_jobs=json.loads(json.dumps(jobs))
@@ -237,6 +292,30 @@ def test_changed_model_or_route_is_not_silently_owned(fixture):
     jobs['owned']['origin']={'platform':'changed','chat_id':'other'}
     plan=removal.inventory(home,api)
     assert next(j for j in plan['jobs'] if j['id']=='owned')['ownership']=='needs explicit adoption'
+
+
+def test_legacy_job_manifest_with_new_fields_at_defaults_remains_owned(fixture):
+    home,jobs,api,*_=fixture
+    manifest=resources.read(home)
+    definition=manifest['jobs']['owned']['definition']
+    definition.pop('wrap_response')
+    definition.pop('repeat_times')
+    resources.write(home,manifest)
+    plan=removal.inventory(home,api)
+    assert next(job for job in plan['jobs'] if job['id']=='owned')['ownership']=='created'
+
+
+def test_legacy_job_manifest_with_changed_new_fields_needs_adoption(fixture):
+    home,jobs,api,*_=fixture
+    manifest=resources.read(home)
+    definition=manifest['jobs']['owned']['definition']
+    definition.pop('wrap_response')
+    definition.pop('repeat_times')
+    resources.write(home,manifest)
+    jobs['owned']['wrap_response']=False
+    jobs['owned']['repeat']={'times':3}
+    plan=removal.inventory(home,api)
+    assert next(job for job in plan['jobs'] if job['id']=='owned')['ownership']=='needs explicit adoption'
 
 
 def test_native_adapter_inventory_does_not_scaffold_missing_cron_state(tmp_path):
