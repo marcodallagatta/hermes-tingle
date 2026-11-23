@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,15 @@ DUE_NAME = "Tingle nudges"
 LEGACY_DAILY_NAME = "[SA] Hermes Tingle daily review"
 LEGACY_DUE_NAME = "[S] Hermes Tingle deadline nudges"
 KNOWN_JOB_NAMES = frozenset((DAILY_NAME, DUE_NAME, LEGACY_DAILY_NAME, LEGACY_DUE_NAME))
+REVIEW_PROMPT_REFRESH_MARKER = "[Tingle review prompt update: untracked-suggestion disclosure v1]"
+REVIEW_PROMPT_REFRESH = (
+    "\n\n" + REVIEW_PROMPT_REFRESH_MARKER + "\n"
+    "For a new actionable source-derived lead that is not already matched to an active item in the supplied context and was not successfully added this run, say `Not added to Tingle in this review` and briefly add `Reply if you want me to track it.` "
+    "Never use this label for a tracked item you are reminding or updating; report that item with its ID. Do not claim the suggestion is absent from Tingle based only on its absence from bounded context. "
+    "Only call it tracked when a matching active item ID is in supplied context or an add succeeded this run. "
+    "If the owner asks to track it, check the active item list (including later pages when present) and reuse a matching active item instead of creating a duplicate. "
+    "Do not create an ambiguous item just to avoid this label."
+)
 
 
 def delivery_platform(delivery: str) -> str:
@@ -87,8 +97,10 @@ def _job_specs(settings: dict[str, Any]) -> list[dict[str, Any]]:
                 "Never auto-edit global skills or Hindsight. "
                 "If a relevant message body contains a directly "
                 "relevant public link (such as the original listing), inspect only that URL using web_extract; do not "
-                "login, contact anyone, purchase, or change external state. Name each new item by its concrete action or awaited outcome, with enough context to identify it without opening the email. Never copy a vague email subject as the task name or invent an action from it. Keep the original subject as supporting detail in the summary. If ownership or the next step is unclear, ask rather than inventing it. Auto-add only clear user-owned commitments; "
+                "login, contact anyone, purchase, or change external state. "
+                "Name each new item by its concrete action or awaited outcome, with enough context to identify it without opening the email. Never copy a vague email subject as the task name or invent an action from it. Keep the original subject as supporting detail in the summary. If ownership or the next step is unclear, ask rather than inventing it. Auto-add only clear user-owned commitments; "
                 "ask before adding ambiguous inferences. A reply alone does not complete a broader obligation. "
+                + REVIEW_PROMPT_REFRESH + "\n\n"
                 "Report material source errors or coverage gaps and never claim full coverage when the snapshot says "
                 "a bound was reached. "
                 "When an item's completion_signal is source_email_trashed, complete it only if email_completion_signals "
@@ -344,6 +356,60 @@ def _inventory(ctx: Any) -> dict[str, str]:
             raise ValueError("malformed Cron inventory")
         inventory[job["job_id"]] = job["name"]
     return inventory
+
+
+def refresh_review_prompt_from_command(ctx: Any, source: Any = None) -> str:
+    """Give the configured owner a read-only recipe for an operator-run prompt refresh."""
+    try:
+        try:
+            from .hermes_tingle import _source_sender_error
+            from . import hermes_tingle_resources as resources
+        except ImportError:
+            from hermes_tingle import _source_sender_error
+            import hermes_tingle_resources as resources
+        import hermes_constants
+
+        refusal = _source_sender_error(source, noun="Review prompt refresh instructions")
+        if refusal:
+            return refusal + " Nothing changed."
+        home = Path(hermes_constants.get_hermes_home()).resolve(strict=True)
+        resources.active(home)
+        _, read_job = _cron_api()
+        names = {DAILY_NAME, LEGACY_DAILY_NAME}
+        matches = [(job_id, name) for job_id, name in _inventory(ctx).items() if name in names]
+        if len(matches) != 1:
+            return "Could not identify exactly one Tingle daily-review job. No changes were made."
+        job_id, name = matches[0]
+        job = read_job(job_id)
+        if (not isinstance(job, dict) or job.get("id") != job_id or job.get("name") != name
+                or Path(str(job.get("script") or "")).name != "hermes_tingle_snapshot.py"
+                or "hermes_tingle" not in (job.get("enabled_toolsets") or [])
+                or job.get("enabled") is not True or job.get("state") not in (None, "scheduled")
+                or job.get("paused_at") or job.get("paused_reason") or not job.get("next_run_at")
+                or not isinstance(job.get("prompt"), str) or not job["prompt"].strip()):
+            return "The saved job is not an enabled, scheduled Tingle daily review. No changes were made."
+        if REVIEW_PROMPT_REFRESH in job["prompt"]:
+            return "The saved daily-review prompt already includes this wording. Nothing changed."
+        if REVIEW_PROMPT_REFRESH_MARKER in job["prompt"]:
+            return "The saved prompt contains an incomplete refresh marker. Ask your operator to inspect it; nothing changed."
+
+        profile = home.name if home.parent.name == "profiles" else "default"
+        script = Path(__file__).resolve().parent / "tools" / "refresh_review_prompt.py"
+        command = " ".join((
+            "python3", shlex.quote(str(script)),
+            "--home", shlex.quote(str(home)),
+            "--profile", shlex.quote(profile),
+            "--job-id", shlex.quote(job_id),
+            "--apply",
+        ))
+        return ("Existing Tingle jobs keep their saved prompt after a plugin update. No changes were made here. "
+                "To refresh it, run this in a separate terminal as the Hermes OS user; the helper shows a preview, "
+                "saves a private mode-0600 backup, requires typing the exact confirmation, and uses `hermes cron edit` to update only the prompt. "
+                "The full prompt is passed in CLI arguments; use only on a trusted host where other local users cannot inspect process arguments. "
+                "Do not run it while someone else is editing this Cron job:\n`" + command + "`\n"
+                "It will not run the review or change the schedule, destination, scripts or sources.")
+    except (ValueError, OSError, ImportError, TypeError, KeyError):
+        return "Couldn't prepare safe review-prompt refresh instructions. No Cron job was changed."
 
 
 def _matches_job(job: Any, job_id: str, spec: dict[str, Any], schedule: dict[str, Any]) -> bool:

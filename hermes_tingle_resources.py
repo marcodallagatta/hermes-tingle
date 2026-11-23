@@ -125,10 +125,36 @@ def job_definition(job):
     # Scheduler counters/claims/next-run values legitimately change, definition does not.
     keys=('id','name','prompt','script','schedule','timezone','deliver','failure_deliver','no_agent','toolsets','enabled_toolsets','catch_up','skills','skill','model','provider',
           'base_url','origin','context_from','workdir','reasoning_effort','pinned','interpreter',
-          'attach_to_session','monitor_script','monitor_url','grace_minutes')
-    return {key:job.get(key) for key in keys}
+          'attach_to_session','monitor_script','monitor_url','grace_minutes','wrap_response')
+    definition = {key:job.get(key) for key in keys}
+    definition['repeat_times'] = (job.get('repeat') or {}).get('times')
+    return definition
+
+
+def job_definition_matches(recorded,job):
+    """Match current records exactly; accept the former schema only at old defaults."""
+    expected=job_definition(job)
+    if recorded==expected:return True
+    legacy={key:value for key,value in expected.items() if key not in {'wrap_response','repeat_times'}}
+    return (recorded==legacy and job.get('wrap_response') is None
+            and (job.get('repeat') or {}).get('times') is None)
 
 
 def record_job(home,job):
     with locked(home):
         data=read(home);data['jobs'][job['id']]={'origin':'created','definition':job_definition(job)};write(home,data)
+
+
+def refresh_recorded_job(home,before,after):
+    """Advance a matching Tingle-owned job record without adopting legacy/drifted jobs."""
+    with locked(home):
+        data=read(home)
+        entry=data['jobs'].get(before.get('id'))
+        if not isinstance(entry,dict) or entry.get('origin')!='created':
+            return False
+        recorded=entry.get('definition')
+        if not job_definition_matches(recorded,before):
+            return False
+        entry['definition']=job_definition(after)
+        write(home,data)
+        return True

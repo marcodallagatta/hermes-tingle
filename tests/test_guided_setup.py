@@ -75,6 +75,43 @@ def preview(guided, evaluation='no'):
     return out
 
 
+def test_refresh_review_command_routes_only_with_existing_valid_policy(tmp_path, synthetic_settings, monkeypatch):
+    import hermes_tingle_setup as setup
+    source = SimpleNamespace(platform='telegram', user_id='42', chat_id='42', chat_type='dm', is_bot=False)
+    monkeypatch.setattr(setup, '_active_profiles', {})
+    monkeypatch.setattr(setup, 'snapshot', lambda home: {'existing': True})
+    monkeypatch.setattr(setup, 'load_settings', lambda home: synthetic_settings)
+    seen = []
+    monkeypatch.setattr(setup_jobs, 'refresh_review_prompt_from_command',
+                        lambda ctx, actor: seen.append((ctx, actor)) or 'prompt refresh preview')
+    ctx = object()
+    result = plugin.handle_command(ctx, 'setup refresh-review', source=source)
+    assert result == 'prompt refresh preview'
+    assert seen == [(ctx, source)]
+
+
+def test_refresh_review_command_refuses_when_policy_is_invalid(tmp_path, monkeypatch):
+    import hermes_tingle_setup as setup
+    source = SimpleNamespace(platform='telegram', user_id='42', chat_id='42', chat_type='dm', is_bot=False)
+    monkeypatch.setattr(setup, '_active_profiles', {})
+    monkeypatch.setattr(setup, 'snapshot', lambda home: None)
+    monkeypatch.setattr(setup_jobs, 'refresh_review_prompt_from_command',
+                        lambda *args: pytest.fail('invalid policy cannot refresh an existing job'))
+    result = plugin.handle_command(object(), 'setup refresh-review', source=source)
+    assert 'No valid Tingle profile setup' in result and 'Nothing changed' in result
+
+
+def test_refresh_review_command_preserves_an_active_setup_draft(guided):
+    home, data, source, ctx = guided
+    state = data / 'setup-state.json'
+    original = b'{"draft":"keep me"}'
+    state.write_bytes(original)
+    result = ctx.command('setup refresh-review', source=source)
+    assert 'setup draft is active' in result
+    assert state.read_bytes() == original
+    assert not ctx.jobs and not ctx.questions
+
+
 def test_guided_evaluation_yes_is_exact_valid_staged_consent_until_write(guided, monkeypatch):
     import hermes_tingle_sources as sources
     from hermes_tingle_config import private_chat_evaluation_policy
