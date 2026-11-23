@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.6 - accept the newer Hermes pricing schema
+
+- Private evaluation now accepts the known `cache_write_1h_cost_per_million` field on Hermes `PricingEntry` when it is absent or `None`. A rated value (including zero) still disables evaluation because Tingle's reservation does not bound a separate 1-hour cache-write dimension; every other added or missing field continues to fail closed. No consent, source, destination, schedule or spending behavior changed.
+- Added regression coverage for absent, `None`, rated, unusable, unrelated-unknown and missing pricing fields. The tested Hermes revision was added to both pinned compatibility matrices.
+- Local verification: **2,698 passed, 30 skipped** in the standalone test environment; **2,731 passed, 5 skipped** against the pinned Hermes runtime with required runtime imports; privacy gate passed. CI will run on the exact pull-request head.
+
 ## 0.9.5 - clarify unadded suggestions
 
 - Daily-review reports now identify actionable leads not added in the current review and invite the owner to reply if they want them tracked. The wording avoids claiming a lead is globally absent based only on bounded context; automatic tracking rules remain unchanged.

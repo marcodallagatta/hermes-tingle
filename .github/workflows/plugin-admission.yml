@@ -26,6 +26,7 @@ jobs:
         hermes_commit:
           - 4162ecf11f611400fa6e5c42d2f360188ce50b39
           - 3b421578588243f920886e6fe79a6faa87ea026e
+          - caafe5389ae585ef77387a962aee05b1bcf17029
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

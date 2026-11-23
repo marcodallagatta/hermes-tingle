@@ -233,10 +233,38 @@ def test_official_snapshot_enables_exact_direct_default_with_upward_eur_buffer(m
 @pytest.mark.parametrize('changes', [
     {'per_second_cost': Decimal('1')},
     {'request_cost_above': Decimal('1')},
+    {'cache_write_1h_cost_per_million_above': Decimal('1')},
 ])
 def test_future_unknown_price_dimensions_disable_instead_of_underreserve(monkeypatch, changes):
     pricing_core(monkeypatch, entry(**changes))
     with pytest.raises(ValueError):
+        assess._pricing(assess.DefaultRoute('openai-api', 'gpt-4o-mini', 'https://api.openai.com/v1'))
+
+
+_ABSENT_PRICE_FIELD = object()
+
+
+@pytest.mark.parametrize('value', [_ABSENT_PRICE_FIELD, None])
+def test_known_1h_cache_write_field_absent_or_none_is_admitted(monkeypatch, value):
+    changes = {} if value is _ABSENT_PRICE_FIELD else {'cache_write_1h_cost_per_million': None}
+    pricing_core(monkeypatch, entry(**changes))
+    bound = assess._pricing(assess.DefaultRoute('openai-api', 'gpt-4o-mini', 'https://api.openai.com/v1'))
+    assert (bound.input_microeur_per_token, bound.output_microeur_per_token) == (1, 1)
+
+
+@pytest.mark.parametrize('value', [Decimal('0'), Decimal('2'), 'unknown'])
+def test_known_1h_cache_write_rate_or_unusable_value_stays_disabled(monkeypatch, value):
+    pricing_core(monkeypatch, entry(cache_write_1h_cost_per_million=value))
+    with pytest.raises(ValueError, match='disabled'):
+        assess._pricing(assess.DefaultRoute('openai-api', 'gpt-4o-mini', 'https://api.openai.com/v1'))
+
+
+def test_missing_required_price_field_stays_disabled(monkeypatch):
+    from types import SimpleNamespace
+    values = vars(entry())
+    values.pop('tier_threshold_tokens')
+    pricing_core(monkeypatch, SimpleNamespace(**values))
+    with pytest.raises(ValueError, match='disabled'):
         assess._pricing(assess.DefaultRoute('openai-api', 'gpt-4o-mini', 'https://api.openai.com/v1'))
 
 

@@ -38,6 +38,7 @@ jobs:
         hermes_commit:
           - 4162ecf11f611400fa6e5c42d2f360188ce50b39
           - 3b421578588243f920886e6fe79a6faa87ea026e
+          - caafe5389ae585ef77387a962aee05b1bcf17029
     env:
       HERMES_PIN: ${{ matrix.hermes_commit }}
     steps:
