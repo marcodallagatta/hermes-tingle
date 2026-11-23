@@ -81,6 +81,24 @@ def test_auto_owner_draft_survives_later_replies_and_restart(guided):  # noqa: F
     assert '/tingle setup destination' in restarted
 
 
+def test_auto_owner_setup_completes_policy_and_jobs(guided):  # noqa: F811
+    from test_guided_setup import ANSWERS, reply
+    home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
+    ctx.command('setup', source=source)
+    for field, value in ANSWERS:
+        reply(ctx, source, field, value)
+    reply(ctx, source, 'confirm-destination', 'telegram:123')
+    written = reply(ctx, source, 'confirm', 'WRITE')
+    assert 'policy saved' in written.lower()
+    assert len(ctx.questions) == 1
+    assert any(choice['label'] == 'Create both jobs' for choice in ctx.questions[0][1])
+    ctx.answer = 'create'
+    activated = ctx.command('setup', source=source)
+    assert 'is scheduled' in activated
+    assert len(ctx.jobs) == 2
+    assert json.loads((home / 'hermes-tingle.json').read_text())['owner_principals'] == ['telegram:42']
+
+
 def test_prior_tracked_item_blocks_automatic_bootstrap(guided):  # noqa: F811
     home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
     _write_db(data / 'data.db', [

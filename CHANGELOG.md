@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.13 - finish auto-owner setup activation
+
+- The immediate job-activation consent after `WRITE` now revalidates an auto-defaulted owner against the unchanged Telegram home-channel config rather than treating the just-saved policy/consumed marker as evidence of an old install. A changed config or sender still fails closed. Added a composed regression that reaches the job-consent question and schedules both jobs in the synthetic profile.
+- Local verification: **2,722 passed, 30 skipped** in the standalone test environment; privacy gate passed. CI will run on the exact pull-request head.
+
 ## 0.9.12 - validate setup provenance manifests strictly
 
 - Automatic-owner freshness checking now rejects duplicate JSON keys and malformed manifest records instead of trusting permissive `json.loads`/the general resource reader. The setup wizard's own draft entry remains exempt, while any prior helper/job record blocks defaults. Added regressions for duplicate `files`/`jobs` keys and invalid draft entries.

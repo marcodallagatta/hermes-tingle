@@ -158,7 +158,7 @@ def _profile_owner(home, binding):
     if platform != 'telegram':
         return None
     document, config = _config_document(home)
-    if document is None:
+    if document is None or config is None:
         return None
     platforms = document.get('platforms')
     if not isinstance(platforms, dict):
@@ -178,7 +178,31 @@ def _profile_owner(home, binding):
     # Telegram DM chat IDs are positive and match the sender; groups never own.
     if not re.fullmatch(r'\d+', owner_chat) or owner_chat != owner_user:
         return None
-    return [f'{platform}:{owner_user}'], _identity(config)
+    info = config.stat()
+    config_identity = [info.st_dev, info.st_ino, hashlib.sha256(config.read_bytes()).hexdigest()]
+    return [f'{platform}:{owner_user}'], config_identity
+
+
+def _default_authority(owners, config_identity):
+    raw = json.dumps({'owner_principals': owners, 'default': True,
+                      'config_identity': config_identity}, ensure_ascii=False).encode()
+    return hashlib.sha256(raw).hexdigest(), config_identity
+
+
+def _current_authority(home, data_dir, source, binding, owners, authority, owner_identity):
+    """Revalidate either the provisioned file or the unchanged home-channel default."""
+    if _binding(source) != binding:
+        return False
+    owner_path = resources.safe(data_dir / OWNER, home)
+    if owner_path.exists():
+        return _authority(home, data_dir, source)[2:] == (authority, owner_identity)
+    default = _profile_owner(home, binding)
+    if default is None:
+        return False
+    current_owners, config_identity = default
+    current_authority, current_identity = _default_authority(current_owners, config_identity)
+    return ((current_owners, current_authority, current_identity)
+            == (owners, authority, owner_identity))
 
 
 def _binding(source):
@@ -214,8 +238,8 @@ def _authority(home, data_dir, source):
         if default is None:
             raise ValueError(PROVISIONING)
         owners, config_identity = default
-        raw = json.dumps({'owner_principals': owners, 'default': True}, ensure_ascii=False).encode()
-        return binding, owners, hashlib.sha256(raw).hexdigest(), config_identity
+        authority, config_identity = _default_authority(owners, config_identity)
+        return binding, owners, authority, config_identity
     if ':'.join(binding[:2]) not in {v.casefold() for v in owners}:
         raise OwnerRefused('Setup refused: this sender is not a configured owner principal. Nothing changed.')
     return binding, owners, hashlib.sha256(raw).hexdigest(), _identity(owner_path)
@@ -442,9 +466,9 @@ def handle(ctx, raw, source):
         saved = activation['policy']
 
         def authorize():
-            if (_binding(source) != binding or home_path.resolve(strict=True) != home
+            if (not _current_authority(home, data_dir, source, binding, owners, authority, owner_identity)
+                    or home_path.resolve(strict=True) != home
                     or Path(hermes_constants.get_hermes_home()).absolute() != home_path
-                    or _authority(home, data_dir, source)[2:] != (authority, owner_identity)
                     or load_settings(home) != saved):
                 raise ValueError('Profile, authority or policy changed; restart setup')
         result = setup_jobs._activate_jobs(ctx, authorize=authorize, first_run_sources=activation['sources'])
