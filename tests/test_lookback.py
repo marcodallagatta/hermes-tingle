@@ -781,7 +781,8 @@ def test_help_is_sectioned_not_a_wall(env):
     assert 'Example: /tingle lookback start 14' in text
     assert max(len(p) for p in text.split('\n\n')) < 1100
     for phrase in ('Nothing is auto-added','visible to everyone on this profile','STORED','Explicit discard',
-                   'Removal does not erase history','Source revoke does not erase prior model/history content',
+                   'Removal does not erase history','Turning a source off stops future reads',
+                   "can't pull back content already sent", 'Google may refresh its saved sign-in on this profile',
                    'content-free body-read audit','no built-in Tingle-operated upload service'.replace('no built-in','has no built-in')):
         assert phrase in text,phrase
 

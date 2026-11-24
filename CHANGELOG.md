@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.15 - one-approval first-run setup
+
+- A fresh owner can start with `/tingle`; one approval uses the current DM, Hermes's effective profile timezone and standard Tingle times. It covers the default policy, proposed Gmail/Calendar/chat checks and grants, and both scheduled jobs. The separate private-chat suggestion filter remains off.
+- A rejected reply keeps the draft at its current approval/input step. Setup copy is shorter and plainer; all user-facing commands are inline code. The private-chat filter consent disclosure now uses direct language while retaining the route, pricing, no-cap and retention limits.
+- Local verification: standalone **2,722 passed, 31 skipped, 243 warnings**; required Hermes runtime **2,756 passed, 5 skipped, 245 warnings**. The five runtime skips are tests for the removed Drive source. Privacy and plugin-validation gates passed; the validator reports existing private-core-import warnings.
+
 ## 0.9.14 - fail closed on legacy onboarding state
 
 - Fresh-profile owner bootstrap now treats the onboarding marker, copied Tingle helpers and unmanifested Tingle Cron jobs as prior install state. Unreadable or malformed Cron inventories also block automatic defaults; unrelated valid Cron jobs remain allowed.

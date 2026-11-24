@@ -16,16 +16,16 @@ except ImportError:
 
 NAME = 'hermes-tingle.json'
 EVALUATION_DISCLOSURE = (
-    'Optional private discovery evaluation is OFF by default. Only bounded eligible owner-DM excerpts '
-    'are sent in a separate tool-free request to this profile’s default model/provider; excerpts may '
-    'reach your chosen provider. Only routes with verified Hermes pricing plus a 1.5 EUR/USD buffer '
-    'are evaluated. Unknown or unsupported routes keep local cues and cost nothing for this evaluator. '
-    'The buffered estimate is not an invoice or a guarantee of actual provider charges. '
-    'Choose the recommended €5 per UTC month cap (or an already-configured lower cap), or explicitly choose no Tingle cap. '
-    'No-cap mode has NO monthly Tingle spending ceiling; provider billing can exceed €5. '
-    'Usage/cost reports are estimates, not invoices. Requests and tokens remain bounded. The evaluator can fail: '
-    'no retries or fallback, and a failed attempt stages nothing. Consent does not enable the chat '
-    'source: with chat off, nothing is sent. Disabling cannot recall prior provider/history copies.'
+    'Private chat filtering is OFF unless you enable it. If enabled, Tingle sends a short, bounded excerpt '
+    'from your private chats to this profile’s default AI model in a separate request with no tools; your '
+    'provider may see that excerpt. Tingle sends it only when Hermes confirms that the route and its pricing '
+    'are supported. Otherwise, it keeps using local text checks and sends no filter request. '
+    'For supported routes, Tingle adds a 1.5 EUR/USD safety margin to its cost estimate; that estimate is '
+    'not your provider bill. Choose a €5 monthly spending cap (UTC month; or the lower limit already saved), '
+    'or choose no monthly Tingle spending cap. With no cap, provider charges can exceed €5. Usage figures are estimates. '
+    'Request and token sizes are limited. If the filter fails, Tingle does not retry or switch providers and '
+    'saves no suggestion. This does not grant chat access: if chat is off, no excerpt is sent. Turning the '
+    'filter off cannot recall an excerpt already sent or remove copies from provider or Hermes history.'
 )
 
 

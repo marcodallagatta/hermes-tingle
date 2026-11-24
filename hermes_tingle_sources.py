@@ -2609,9 +2609,10 @@ def probe_source(kind: str) -> str | None:
 
 
 def source_privacy_notice() -> str:
-    return ("Enabling a Google source performs a minimal account check; chat enable checks the local history interface without reading messages. Later authorized source content can go to your "
-            "configured model and Hermes history; Google helpers may refresh their local OAuth token. "
-            "Source revoke does not erase prior model/history content. Review README: Privacy and data before enabling.")
+    return ("Connection checks do not read email messages or event details. Google may refresh its saved sign-in on this profile; "
+            "chat checks access without reading messages. Later source text and tracked details may be sent to your "
+            "configured AI provider and appear in Hermes history. Turning a source off stops future reads, but "
+            "can't pull back content already sent or saved.")
 
 
 def body_account_identity() -> tuple[str, str]:

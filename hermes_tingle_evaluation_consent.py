@@ -16,7 +16,7 @@ except ImportError:
     from hermes_tingle_config import private_chat_evaluation_policy, validate_settings
 
 
-USAGE = 'Usage: /tingle evaluation status|enable|disable (configured owner, verified human DM only).'
+USAGE = 'Usage: `/tingle evaluation status|enable|disable` (configured owner, verified human DM only).'
 
 
 def _binding(source):
@@ -97,20 +97,20 @@ def handle(ctx, source, args):
         action = args[0]
         choice = None
         if action == 'status':
-            return 'Private discovery evaluation consent: ' + ('enabled.' if private_chat_evaluation_policy(settings) else 'disabled.')
+            return 'Private-chat filter: ' + ('on.' if private_chat_evaluation_policy(settings) else 'off.')
         if action == 'enable':
             chooser = getattr(ctx, 'ask_choice', None)
             if not callable(chooser):
-                return 'Evaluation confirmation unavailable; nothing changed.'
+                return 'Private-chat filter confirmation unavailable; nothing changed.'
             try:
-                choice = chooser(policy.EVALUATION_DISCLOSURE + '\nEnable this profile’s private evaluation consent?',
-                                 [{'value': 'enable', 'label': 'Enable — €5 cap (recommended)'},
-                                  {'value': 'no-cap', 'label': 'Enable — NO Tingle spending cap'},
-                                  {'value': 'cancel', 'label': 'Keep unchanged'}])
+                choice = chooser(policy.EVALUATION_DISCLOSURE + '\nEnable the filter for private-chat suggestions?',
+                                 [{'value': 'enable', 'label': 'Enable — €5/month cap'},
+                                  {'value': 'no-cap', 'label': 'Enable — no monthly spending cap'},
+                                  {'value': 'cancel', 'label': 'Cancel'}])
             except Exception:
-                return 'Evaluation confirmation unavailable; nothing changed.'
+                return 'Private-chat filter confirmation unavailable; nothing changed.'
             if choice not in ('enable', 'no-cap'):
-                return 'Evaluation not enabled; nothing changed.'
+                return 'Private-chat filter not enabled; nothing changed.'
         updated = copy.deepcopy(settings)
         if action == 'enable':
             value = policy.evaluation_consent(':'.join(binding[:2]), no_cap=choice == 'no-cap')
@@ -128,11 +128,11 @@ def handle(ctx, source, args):
             # preserves a private backup, and verifies readback before returning.
             policy.write_policy(home, updated, expected)
         if action == 'enable':
-            return 'Private discovery evaluation consent enabled. Source grants, jobs and other settings unchanged; no scan or model request was run.'
-        return ('Private discovery evaluation consent disabled. An already-dispatched request may finish, '
-                'but no new ones start. Source grants, jobs and other settings unchanged.')
+            return 'Private-chat filter enabled. No scan or model request was made. Sources, jobs and other settings are unchanged.'
+        return ('Private-chat filter disabled. An already-sent excerpt may remain in provider or Hermes history. '
+                'No new requests will start. Sources, jobs and other settings are unchanged.')
     except (ValueError, OSError, KeyError, TypeError, ImportError):
         if write_attempted:
-            return ('Evaluation policy write/readback stopped; policy may already be saved. '
+            return ('Private-chat filter update stopped; policy may already be saved. '
                     'Ask your operator to inspect this profile before retrying; no automatic retry was made.')
-        return 'Evaluation stopped: valid policy, unchanged active profile and configured owner authority are required; nothing changed.'
+        return 'Private-chat filter change stopped: valid policy, active profile and configured owner are required; nothing changed.'

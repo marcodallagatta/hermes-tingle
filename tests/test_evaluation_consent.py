@@ -62,16 +62,19 @@ def test_enable_discloses_then_saves_exact_valid_consent_only(consent_env):
     raw = path.read_bytes()
     def enable(question, choices):
         assert path.read_bytes() == raw
-        for text in ('OFF', 'bounded', 'eligible owner-DM', 'tool-free', 'default model/provider',
-                     'verified Hermes pricing', '1.5 EUR/USD', 'local cues', 'cost nothing',
-                     'not an invoice', '€5', 'fail', 'no retries or fallback', 'chosen provider'):
+        for text in ('OFF', 'bounded', 'private chats', 'default AI model', 'no tools',
+                     'provider may see', 'route and its pricing', '1.5 EUR/USD',
+                     'local text checks', 'no filter request', '€5', 'UTC month',
+                     'exceed €5', 'estimate', 'not your provider bill', 'sizes are limited',
+                     'does not retry or switch providers', 'does not grant chat access',
+                     'if chat is off', 'cannot recall'):
             assert text in question
         assert {c['value'] for c in choices} == {'enable', 'no-cap', 'cancel'}
         return 'enable'
     ctx.ask_choice = enable
     out = ctx.command('evaluation enable', source=source)
     saved = json.loads(path.read_text())
-    assert 'consent enabled' in out
+    assert 'filter enabled' in out
     assert saved == {**before, 'private_chat_evaluation': CONSENT}
     assert private_chat_evaluation_policy(saved) == CONSENT
     assert path.stat().st_mode & 0o777 == 0o600
@@ -96,7 +99,7 @@ def test_status_reports_consent_only_without_chooser_or_route_lookup(consent_env
     if enabled:
         path.write_text(json.dumps({**before, 'private_chat_evaluation': CONSENT}))
     raw = path.read_bytes()
-    assert ctx.command('evaluation status', source=source) == 'Private discovery evaluation consent: ' + ('enabled.' if enabled else 'disabled.')
+    assert ctx.command('evaluation status', source=source) == 'Private-chat filter: ' + ('on.' if enabled else 'off.')
     assert path.read_bytes() == raw and not ctx.questions
 
 
@@ -106,7 +109,7 @@ def test_disable_removes_only_nested_policy_and_mentions_inflight(consent_env, e
     if enabled:
         path.write_text(json.dumps({**before, 'private_chat_evaluation': CONSENT}))
     out = ctx.command('evaluation disable', source=source)
-    assert 'consent disabled' in out and 'already-dispatched request may finish' in out and 'no new ones start' in out
+    assert 'filter disabled' in out and 'already-sent excerpt may remain' in out and 'No new requests will start' in out
     assert json.loads(path.read_text()) == before and not ctx.questions
 
 
@@ -142,7 +145,7 @@ def test_only_configured_owner_with_positive_dm_metadata_can_use_commands(consen
     raw = path.read_bytes()
     out = ctx.command('evaluation ' + command, source=source)
     assert 'nothing changed' in out.lower()
-    assert 'consent enabled' not in out and 'consent disabled' not in out
+    assert 'filter enabled' not in out and 'filter disabled' not in out
     assert path.read_bytes() == raw and not ctx.questions
 
 
@@ -168,7 +171,7 @@ def test_enable_reconsent_preserves_existing_lower_cap(consent_env):
     lower = {**CONSENT, 'monthly_limit_microeur': 321_000}
     path.write_text(json.dumps({**before, 'private_chat_evaluation': lower}))
     ctx.answer = 'enable'
-    assert 'consent enabled' in ctx.command('evaluation enable', source=source)
+    assert 'filter enabled' in ctx.command('evaluation enable', source=source)
     assert json.loads(path.read_text()) == {**before, 'private_chat_evaluation': lower}
 
 
@@ -188,7 +191,7 @@ def test_enable_uses_shared_writer_with_exact_snapshot_and_no_lock_during_choice
         return 'enable'
     monkeypatch.setattr(policy, 'write_policy', checked)
     ctx.ask_choice = choose
-    assert 'consent enabled' in ctx.command('evaluation enable', source=source)
+    assert 'filter enabled' in ctx.command('evaluation enable', source=source)
     assert writes == [{**before, 'private_chat_evaluation': CONSENT}]
 
 
@@ -252,7 +255,7 @@ def test_shared_writer_last_moment_stale_check_is_used(consent_env, monkeypatch,
     monkeypatch.setattr(policy, 'write_policy', raced)
     ctx.answer = 'enable'
     out = ctx.command('evaluation ' + action, source=source)
-    assert 'stopped' in out.lower() and 'consent enabled' not in out and 'consent disabled' not in out
+    assert 'stopped' in out.lower() and 'filter enabled' not in out and 'filter disabled' not in out
     assert path.read_bytes() == raw + b' ' and writes == [raw]
 
 
@@ -270,7 +273,7 @@ def test_failed_writer_readback_is_not_reported_as_success_or_retried(consent_en
     ctx.answer = 'enable'
     out = ctx.command('evaluation ' + action, source=source)
     assert 'may already be saved' in out and 'no automatic retry' in out
-    assert 'synthetic private' not in out and 'consent enabled' not in out and 'consent disabled' not in out
+    assert 'synthetic private' not in out and 'filter enabled' not in out and 'filter disabled' not in out
     assert checks == [path.parent]
     assert json.loads(path.read_text()) == ({**before, 'private_chat_evaluation': CONSENT} if action == 'enable' else before)
 
@@ -302,7 +305,7 @@ def test_symlink_policy_is_refused(consent_env, action):
 def test_help_documents_supported_consent_commands():
     out = plugin.handle_command(None, 'help')
     assert '/tingle evaluation status|enable|disable' in out
-    assert 'default-off' in out and 'owner DM' in out
+    assert 'off by default' in out and 'owner DM only' in out
 
 
 @pytest.mark.parametrize('action', ['status', 'enable', 'disable'])
@@ -371,7 +374,7 @@ def test_private_dm_alias_and_authenticated_principal_normalization(consent_env)
     source.chat_type = 'private'
     path.write_text(json.dumps({**before, 'owner_principals': ['Telegram:42']}))
     ctx.answer = 'enable'
-    assert 'consent enabled' in ctx.command('evaluation enable', source=source)
+    assert 'filter enabled' in ctx.command('evaluation enable', source=source)
     saved = json.loads(path.read_text())
     assert private_chat_evaluation_policy(saved) == CONSENT
     assert saved['owner_principals'] == ['Telegram:42']

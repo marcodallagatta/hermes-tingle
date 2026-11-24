@@ -64,3 +64,26 @@ def install() -> None:
         storage.plugin_db = plugin_db
         package.plugin_storage = storage
         sys.modules["plugins.plugin_storage"] = storage
+
+    if _missing("hermes_time"):
+        import os
+
+        module = types.ModuleType("hermes_time")
+
+        def get_timezone_name():
+            """Single-profile test fallback; routed-profile tests override this resolver."""
+            override = os.environ.get("HERMES_TIMEZONE", "").strip()
+            if override:
+                return override
+            try:
+                import hermes_constants
+                import hermes_yaml
+                path = Path(hermes_constants.get_hermes_home()) / "config.yaml"
+                document = hermes_yaml.safe_load(path.read_text(encoding="utf-8"))
+            except Exception:
+                return ""
+            value = document.get("timezone") if isinstance(document, dict) else None
+            return value.strip() if isinstance(value, str) else ""
+
+        setattr(module, "get_timezone_name", get_timezone_name)
+        sys.modules["hermes_time"] = module

@@ -25,21 +25,29 @@ def test_readme_sample_is_valid_and_excludes_synthetic_ticket(tmp_path):
     assert re.search(loaded["ticket_exclude_patterns"][0], "TASK-123")
 
 
-def test_fresh_setup_docs_use_typed_source_choices():
+def test_fresh_setup_docs_use_one_approval_and_plain_defaults():
     root = Path(__file__).resolve().parents[1]
     for relative in ("README.md", "docs/installation.md", "docs/beta-setup.md",
                      "docs/onboarding.md"):
         text = (root / relative).read_text(encoding="utf-8")
-        assert "/tingle setup sources all" in text
-        assert "/tingle setup sources none" in text
-        assert "Keep all off for now" not in text
+        assert "/tingle setup sources all" not in text
+        assert "/tingle setup sources none" not in text
+        assert "00:00" in text and "08:00" in text and "16:00" in text
+        assert "guided first-run policy/source/evaluator consent" not in text
+        assert "separate two-job consent" not in text
+        assert "Source opt-ins and windows require separate permission" not in text
+        assert "keep-all-off opt-out" not in text
     for relative in ("README.md", "docs/installation.md", "docs/beta-setup.md",
                      "docs/onboarding.md"):
-        assert "/tingle source enable <kind>" in (root / relative).read_text(encoding="utf-8")
+        assert "/tingle source enable" in (root / relative).read_text(encoding="utf-8")
     installation = (root / "docs/installation.md").read_text(encoding="utf-8")
     assert "hermes -p <profile> tools enable --platform telegram hermes_tingle" in installation
     assert "fresh session or after `/reset`" in installation
     assert "A saved platform list may intentionally omit a known plugin toolset" in installation
+    onboarding = (root / "docs/onboarding.md").read_text(encoding="utf-8")
+    assert "one plain-language approval screen" in onboarding
+    assert "does not send the user back through questions" in onboarding
+    assert "profile's Hermes `timezone`" in onboarding
 
 
 def test_existing_installation_prompt_refresh_is_documented():
@@ -56,7 +64,11 @@ def test_docs_state_approvals_are_record_only_and_no_external_messaging():
     readme = (root / "README.md").read_text(encoding="utf-8")
     schema_text = (root / "schemas.py").read_text(encoding="utf-8")
     assert "does not send messages to external counterparties" in readme
-    assert "only records approve/reject decisions" in readme
+    assert "Item approvals only record your decision" in readme
+    assert "Tingle does not perform that action" in readme
+    assert "The separate Start Tingle setup approval applies defaults, checks sources and creates the two jobs." in readme
+    assert "Start Tingle is a separate setup approval" in readme
+    assert "Nothing is executed or sent by an approval" not in readme
     assert "does not initiate messages to external contacts or agents" in schema_text
     assert "owner reminders and reports use the configured destination" in schema_text
     bug_template = (root / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml").read_text(encoding="utf-8")

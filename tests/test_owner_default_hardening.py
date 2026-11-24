@@ -67,34 +67,28 @@ def _write_db(db, statements):
     conn.close()
 
 
-def test_auto_owner_draft_survives_later_replies_and_restart(guided):  # noqa: F811
+def test_auto_owner_draft_survives_invalid_reply_and_restart(guided):  # noqa: F811
     home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
+    ctx.answer = None
     first = ctx.command('setup', source=source)
-    assert '/tingle setup destination' in first
-    second = ctx.command('setup destination here', source=source)
-    assert '/tingle setup timezone' in second
+    assert '`/tingle setup confirm WRITE`' in first
     state = json.loads((data / 'setup-state.json').read_text())
     assert state['policy']['delivery'] == 'telegram:42'
-    # A discarded draft must not make fresh onboarding impossible.
+    before = (data / 'setup-state.json').read_bytes()
+    wrong = ctx.command('setup evaluation yes', source=source)
+    assert (data / 'setup-state.json').read_bytes() == before
+    assert '`/tingle setup confirm WRITE`' in wrong
     ctx.command('setup cancel', source=source)
     restarted = ctx.command('setup', source=source)
-    assert '/tingle setup destination' in restarted
+    assert '`/tingle setup confirm WRITE`' in restarted
 
 
 def test_auto_owner_setup_completes_policy_and_jobs(guided):  # noqa: F811
-    from test_guided_setup import ANSWERS, reply
     home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
-    ctx.command('setup', source=source)
-    for field, value in ANSWERS:
-        reply(ctx, source, field, value)
-    reply(ctx, source, 'confirm-destination', 'telegram:123')
-    written = reply(ctx, source, 'confirm', 'WRITE')
-    assert 'policy saved' in written.lower()
-    assert len(ctx.questions) == 1
-    assert any(choice['label'] == 'Create both jobs' for choice in ctx.questions[0][1])
-    ctx.answer = 'create'
-    activated = ctx.command('setup', source=source)
+    ctx.answer = 'start'
+    activated = ctx.command('', source=source)
     assert 'is scheduled' in activated
+    assert len(ctx.questions) == 1
     assert len(ctx.jobs) == 2
     assert json.loads((home / 'hermes-tingle.json').read_text())['owner_principals'] == ['telegram:42']
 
@@ -167,8 +161,9 @@ def test_unrelated_cron_job_does_not_block_automatic_bootstrap(guided):  # noqa:
         'id': 'weekly-cleanup', 'name': 'Weekly cleanup', 'script': 'cleanup.py',
         'enabled_toolsets': ['web'],
     }]}))
+    ctx.answer = None
     out = ctx.command('setup', source=source)
-    assert '/tingle setup destination' in out
+    assert '`/tingle setup confirm WRITE`' in out
     assert (data / 'setup-state.json').exists()
 
 
@@ -181,8 +176,9 @@ def test_unrelated_cron_job_with_nullable_toolsets_allows_automatic_bootstrap(gu
         'id': 'weekly-cleanup', 'name': 'Weekly cleanup', 'script': 'cleanup.py',
         'enabled_toolsets': enabled_toolsets,
     }]}))
+    ctx.answer = None
     out = ctx.command('setup', source=source)
-    assert '/tingle setup destination' in out
+    assert '`/tingle setup confirm WRITE`' in out
     assert (data / 'setup-state.json').exists()
 
 
@@ -261,6 +257,7 @@ def test_admitted_chat_metadata_alone_still_allows_bootstrap(guided):  # noqa: F
         'create table known_chats (chat_ref text)',
         "insert into known_chats values ('telegram:42')",
     ])
+    ctx.answer = None
     out = ctx.command('setup', source=source)
-    assert '/tingle setup destination' in out
+    assert '`/tingle setup confirm WRITE`' in out
     assert (data / 'setup-state.json').exists()

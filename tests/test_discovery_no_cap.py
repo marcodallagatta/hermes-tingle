@@ -19,16 +19,14 @@ from test_evaluation_consent import consent_env, CONSENT
 from test_guided_setup import guided, preview, reply
 
 
-def test_guided_explicit_no_cap_requires_destination_and_write(guided):
+def test_guided_setup_leaves_private_chat_filter_off(guided):
     home, data, source, ctx = guided
-    out = preview(guided, evaluation='no-cap')
-    assert 'NO monthly Tingle spending ceiling' in out
+    out = preview(guided)
     staged = json.loads((data / 'setup-state.json').read_text())['policy']
-    assert staged['private_chat_evaluation'] == {**CONSENT, 'consent': 'owner-dm-excerpts-v2', 'monthly_limit_microeur': 0}
+    assert 'private_chat_evaluation' not in staged
+    assert 'AI filter for private chat suggestions stays off' in out
+    assert 'no monthly Tingle spending cap' not in out
     assert not (home / 'hermes-tingle.json').exists()
-    reply(ctx, source, 'confirm-destination', 'telegram:123')
-    assert 'policy saved' in reply(ctx, source, 'confirm', 'WRITE')
-    assert json.loads((home / 'hermes-tingle.json').read_text()) == staged
 
 from hermes_tingle_config import private_chat_evaluation_policy
 
@@ -41,22 +39,22 @@ def test_owner_explicit_no_cap_reconsent_keeps_v1_default_and_exact_v2(consent_e
     assert 'nothing changed' in ctx.command('evaluation enable', source=source)
     assert path.read_bytes() == raw
     ctx.answer = 'no-cap'
-    assert 'consent enabled' in ctx.command('evaluation enable', source=source)
+    assert 'filter enabled' in ctx.command('evaluation enable', source=source)
     saved = json.loads(path.read_text())
     expected = {**CONSENT, 'consent': 'owner-dm-excerpts-v2', 'monthly_limit_microeur': 0}
     assert saved == {**before, 'private_chat_evaluation': expected}
     assert private_chat_evaluation_policy(saved) == expected
     question, choices = ctx.questions[-1]
     assert {c['value'] for c in choices} == {'enable', 'no-cap', 'cancel'}
-    for text in ('NO monthly Tingle spending ceiling', 'exceed €5', 'not invoices',
-                 'no retries or fallback', 'bounded', 'local cues'):
+    for text in ('no monthly Tingle spending cap', 'provider charges can exceed €5', 'estimates',
+                 'does not retry or switch providers', 'bounded excerpt', 'local text checks'):
         assert text in question
     for patch in ({'consent': 'owner-dm-excerpts-v1'}, {'monthly_limit_microeur': 1},
                   {'monthly_limit_microeur': False}, {'extra': True}):
         assert private_chat_evaluation_policy({**saved, 'private_chat_evaluation': {**expected, **patch}}) is None
     # Explicit recommended capped choice can restore v1, never a zero v1 sentinel.
     ctx.answer = 'enable'
-    assert 'consent enabled' in ctx.command('evaluation enable', source=source)
+    assert 'filter enabled' in ctx.command('evaluation enable', source=source)
     assert json.loads(path.read_text())['private_chat_evaluation'] == CONSENT
 
 

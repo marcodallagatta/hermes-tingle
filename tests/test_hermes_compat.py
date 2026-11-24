@@ -103,6 +103,36 @@ def test_plugin_is_host_ready_under_real_runtime_audit():
     assert report.host_ready, report.to_dict()
 
 
+def test_routed_profile_setup_uses_hermes_profile_timezone(tmp_path, monkeypatch):
+    hermes_time = hermes_import("hermes_time")
+    constants = hermes_import("hermes_constants")
+    secret_scope = hermes_import("agent.secret_scope")
+    import hermes_tingle_setup as setup
+
+    default_home, routed_home = tmp_path / "default-profile", tmp_path / "routed-profile"
+    default_home.mkdir()
+    routed_home.mkdir()
+    (default_home / "config.yaml").write_text("timezone: Asia/Tokyo\n", encoding="utf-8")
+    (routed_home / "config.yaml").write_text("timezone: Europe/Berlin\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(default_home))
+    monkeypatch.setenv("HERMES_TIMEZONE", "Asia/Tokyo")  # Default profile's bridged value.
+    active_home = [default_home]
+    monkeypatch.setattr(constants, "get_hermes_home", lambda: active_home[0])
+    was_multiplexed = secret_scope.is_multiplex_active()
+    secret_scope.set_multiplex_active(False)
+    try:
+        hermes_time.reset_cache()
+        assert hermes_time.get_timezone_name() == "Asia/Tokyo"
+        secret_scope.set_multiplex_active(True)
+        active_home[0] = routed_home
+        hermes_time.reset_cache()
+        assert hermes_time.get_timezone_name() == "Europe/Berlin"
+        assert setup._profile_timezone(routed_home) == "Europe/Berlin"
+    finally:
+        hermes_time.reset_cache()
+        secret_scope.set_multiplex_active(was_multiplexed)
+
+
 @pytest.mark.parametrize("isolation", ["host", "in_process"])
 def test_plugin_registers_and_invokes_in_real_isolation_runtime(tmp_path, isolation):
     audit = hermes_import("hermes_cli.plugin_isolation_audit")

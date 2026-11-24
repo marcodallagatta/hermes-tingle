@@ -27,7 +27,7 @@ _RELATIVE_RE = re.compile(r"^(\d{1,3})(m|h|d|w)$", re.IGNORECASE)
 # child still serving old code must keep reporting its old version, so the
 # owner can see from chat whether a restart is still needed. Bump it together
 # with plugin.yaml on every meaningful batch (a test guards the match).
-VERSION = "0.9.14"
+VERSION = "0.9.15"
 
 
 def _json(payload: dict[str, Any]) -> str:
@@ -782,11 +782,16 @@ def handle_command(ctx: Any, raw_args: str, source: Any = None, **kwargs: Any) -
             return "No authenticated human sender is available. No owner was enrolled."
         platform, user_id, chat_id = _deciding_principal(source)
         return (f"Authenticated sender: {platform}:{user_id}; chat ID: {chat_id or 'unavailable'}. "
-                "Display only, no owner enrollment. Choose and confirm the reminder destination in /tingle setup; "
-                "sender ID is not always the chat destination.")
+                "Display only, no owner enrollment. Fresh setup sends reminders to this verified DM by default.")
     try:
         load_settings()
     except ValueError:
+        if not parts:
+            try:
+                from .hermes_tingle_setup import handle as setup_handle
+            except ImportError:
+                from hermes_tingle_setup import handle as setup_handle
+            return setup_handle(ctx, '', source)
         try:
             from .hermes_tingle_setup import PROVISIONING
         except ImportError:
@@ -913,7 +918,7 @@ def handle_command(ctx: Any, raw_args: str, source: Any = None, **kwargs: Any) -
                 "• `/tingle ack <receipt>` - confirm a reminder batch you received\n"
                 "• `/tingle timing HT-ID` - private timing details; `/tingle debug` - opt-in local counts\n"
                 "• `/tingle setup` - review and schedule automation; `/tingle setup refresh-review` - prepare a manual prompt refresh for an existing daily review (owner DM)\n"
-                "• `/tingle evaluation status|enable|disable` - default-off private discovery consent, owner DM only\n\n"
+                "• `/tingle evaluation status|enable|disable` - private-chat suggestion filter (off by default; owner DM only)\n\n"
                 "Approval requests for future actions:\n"
                 "• `/tingle approvals` lists pending requests; `/tingle approve AR-1A2B3C` or `/tingle reject AR-1A2B3C` decides one\n\n"
                 + _optional_line(True) + "\n"

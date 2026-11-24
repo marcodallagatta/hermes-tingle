@@ -112,9 +112,9 @@ def test_cancel_and_changed_during_confirmation(tmp_path, monkeypatch, synthetic
 
 def test_missing_config_orientation_and_identity_no_enrollment(tmp_path):
     (tmp_path / wizard.NAME).unlink()
-    sender = SimpleNamespace(platform="telegram", user_id="42", chat_id="-123", is_bot=False)
-    assert "operator" in plugin.handle_command(None, "")
-    assert "tingle_init.py" not in plugin.handle_command(None, "")
+    sender = SimpleNamespace(platform="telegram", user_id="42", chat_id="-123", chat_type="dm", is_bot=False)
+    assert "operator" in plugin.handle_command(None, "", source=sender)
+    assert "tingle_init.py" not in plugin.handle_command(None, "", source=sender)
     assert "no item captured" in plugin.handle_tool(None, {"action": "add", "title": "x"})
     result = plugin.handle_command(None, "identity", source=sender)
     assert "telegram:42" in result and "-123" in result and "no owner enrollment" in result
@@ -340,9 +340,10 @@ def test_activation_privacy_in_preview_before_choice():
 def test_source_privacy_before_enable_direction(monkeypatch):
     monkeypatch.setattr(sources, "probe_source", lambda _: pytest.fail("orientation cannot probe"))
     result = plugin.handle_command(None, "sources")
-    assert result.index("configured model") < result.index("Change with")
-    assert "does not erase" in result and "minimal account check" in result
-    assert "chat enable checks the local history interface without reading messages" in result
+    assert result.index("configured AI provider") < result.index("Change with")
+    assert "can't pull back content already sent" in result
+    assert "Google may refresh its saved sign-in on this profile" in result
+    assert "chat checks access without reading messages" in result
 
 
 def use_real_identity(monkeypatch):

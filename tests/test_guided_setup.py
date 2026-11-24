@@ -61,18 +61,162 @@ def reply(ctx, source, field, value):
     return ctx.command('setup ' + field + ' ' + value, source=source)
 
 
-def preview(guided, evaluation='no'):
+def preview(guided, evaluation=None):
+    del evaluation  # Kept as a call-site shim while consent is tested separately.
     home, data, source, ctx = guided
+    ctx.answer = None
     out = ctx.command('setup', source=source)
-    assert '/tingle setup destination <value>' in out
-    for index, (field, value) in enumerate(ANSWERS):
-        out = reply(ctx, source, field, evaluation if field == 'evaluation' else value)
-        assert not (home / 'hermes-tingle.json').exists()
-        assert not ctx.jobs and not ctx.questions
-        assert not (home / 'scripts').exists()
-        if index + 1 < len(ANSWERS):
-            assert '/tingle setup ' + ANSWERS[index + 1][0] + ' <value>' in out
+    assert '`/tingle setup confirm WRITE`' in out
     return out
+
+
+def test_first_tingle_offers_one_approval_with_hermes_defaults(guided):
+    home, data, source, ctx = guided
+    (home / 'config.yaml').write_text(
+        'timezone: Europe/Berlin\n'
+        'platforms:\n'
+        '  telegram:\n'
+        '    home_channel:\n'
+        '      platform: telegram\n'
+        "      user_id: '42'\n"
+        "      chat_id: '42'\n"
+    )
+    ctx.answer = None  # No choice is not consent; it leaves an approval route available.
+
+    out = plugin.handle_command(ctx, '', source=source)
+
+    assert len(ctx.questions) == 1
+    question, choices = ctx.questions[0]
+    assert [choice['value'] for choice in choices] == ['start', 'cancel']
+    state = json.loads((data / 'setup-state.json').read_text())
+    policy = state['policy']
+    assert state['step'] == 'approval'
+    assert state['sources'] == 'all'
+    assert policy['delivery'] == 'telegram:42'
+    assert policy['timezone'] == 'Europe/Berlin'
+    assert policy['daily_schedule'] == '0 0,8,16 * * *'
+    assert policy['deadline_poll_minutes'] == 30
+    assert policy['date_only_time'] == '09:00'
+    assert policy['availability_start'] == '09:00'
+    assert policy['availability_end'] == '18:00'
+    assert all(policy[key] == [] for key in (
+        'calendar_exclude_substrings', 'workstream_exclude_values',
+        'source_exclude_substrings', 'ticket_exclude_patterns'))
+    assert 'private_chat_evaluation' not in policy
+    assert not (home / 'hermes-tingle.json').exists()
+    assert not ctx.jobs
+    assert 'Europe/Berlin' in question and 'Gmail' in question and 'read-only' in question
+    assert 'Google may refresh its saved sign-in' in question
+    assert 'chat checks access without reading messages' in question
+    assert 'Turning a source off stops future reads' in question
+    assert "can't pull back content already sent" in question
+    assert 'Google Drive is not' in question
+    assert 'evaluation' not in question and 'same-day availability window' not in question
+    assert 'optional private discovery evaluation' not in question
+    assert '/tingle setup confirm WRITE' in out
+    assert '/tingle setup' in out
+    import re
+    for command in re.findall(r'/tingle(?: [A-Za-z_-]+)*', out):
+        assert f'`{command}`' in out
+
+
+def test_hermes_timezone_environment_override_wins_over_profile_yaml(guided, monkeypatch):
+    home, data, source, ctx = guided
+    (home / 'config.yaml').write_text('timezone: Europe/Berlin\n')
+    monkeypatch.setenv('HERMES_TIMEZONE', 'Asia/Tokyo')
+    ctx.answer = None
+
+    out = plugin.handle_command(ctx, '', source=source)
+
+    state = json.loads((data / 'setup-state.json').read_text())
+    assert state['policy']['timezone'] == 'Asia/Tokyo'
+    assert 'Asia/Tokyo' in out
+    assert 'Europe/Berlin' not in out
+
+
+def test_routed_profile_uses_hermes_timezone_not_default_process_timezone(guided, monkeypatch):
+    import sys
+
+    home, data, source, ctx = guided
+    (home / 'config.yaml').write_text('timezone: Europe/Berlin\n')
+    monkeypatch.setenv('HERMES_TIMEZONE', 'Asia/Tokyo')
+    monkeypatch.setitem(
+        sys.modules, 'hermes_time',
+        SimpleNamespace(get_timezone_name=lambda: 'Europe/Berlin'),
+    )
+    ctx.answer = None
+
+    plugin.handle_command(ctx, '', source=source)
+
+    state = json.loads((data / 'setup-state.json').read_text())
+    assert state['policy']['timezone'] == 'Europe/Berlin'
+
+
+def test_first_approval_creates_jobs_and_checks_sources_without_second_prompt(guided, monkeypatch):
+    import sqlite3
+    import hermes_tingle_sources as sources
+    import hermes_tingle_store as store
+
+    home, data, source, ctx = guided
+    def connect(_):
+        connection = sqlite3.connect(home / 'fresh-setup-sources.db')
+        connection.row_factory = sqlite3.Row
+        return connection
+    monkeypatch.setattr(store, 'plugin_db', connect)
+    checked = []
+    monkeypatch.setattr(sources, 'probe_source', lambda kind: checked.append(kind) or ('a' * 64 if kind in ('email', 'calendar') else None))
+    ctx.answer = 'start'
+
+    out = plugin.handle_command(ctx, '', source=source)
+
+    assert 'scheduled' in out
+    assert checked == ['email', 'calendar', 'chat']
+    assert all(store.source_enabled(kind) for kind in ('email', 'calendar', 'chat'))
+    assert len(ctx.questions) == 1
+    assert len(ctx.jobs) == 2
+    assert (home / 'hermes-tingle.json').exists()
+    assert (home / 'scripts' / 'hermes_tingle_due.py').exists()
+
+
+def test_invalid_fresh_setup_reply_keeps_approval_at_same_step(guided):
+    home, data, source, ctx = guided
+    ctx.answer = None
+    plugin.handle_command(ctx, '', source=source)
+    draft = data / 'setup-state.json'
+    before = draft.read_bytes()
+
+    out = ctx.command('setup evaluation yes', source=source)
+
+    assert draft.read_bytes() == before
+    assert 'Nothing changed' in out
+    assert '`/tingle setup confirm WRITE`' in out
+    assert not (home / 'hermes-tingle.json').exists()
+    assert not ctx.jobs
+
+
+def test_invalid_legacy_field_reply_keeps_current_step_and_policy(guided):
+    home, data, source, ctx = guided
+    preview(guided)
+    draft = data / 'setup-state.json'
+    state = json.loads(draft.read_text())
+    state['step'] = 7  # An in-progress draft from the previous wizard version.
+    state['sources'] = 'all'
+    draft.write_text(json.dumps(state))
+    before = draft.read_bytes()
+
+    out = reply(ctx, source, 'evaluation', 'maybe')
+
+    assert draft.read_bytes() == before
+    assert 'Try this step again' in out
+    assert '`/tingle setup evaluation <value>`' in out
+    assert 'Private chat filtering is OFF' in out
+    assert not (home / 'hermes-tingle.json').exists()
+
+    next_prompt = reply(ctx, source, 'evaluation', 'no')
+    resumed = json.loads(draft.read_text())
+    assert resumed['step'] == 8
+    assert 'private_chat_evaluation' not in resumed['policy']
+    assert 'exclusions <value>' in next_prompt
 
 
 def test_refresh_review_command_routes_only_with_existing_valid_policy(tmp_path, synthetic_settings, monkeypatch):
@@ -112,91 +256,44 @@ def test_refresh_review_command_preserves_an_active_setup_draft(guided):
     assert not ctx.jobs and not ctx.questions
 
 
-def test_guided_evaluation_yes_is_exact_valid_staged_consent_until_write(guided, monkeypatch):
-    import hermes_tingle_sources as sources
-    from hermes_tingle_config import private_chat_evaluation_policy
-    from hermes_tingle_store import list_source_optins
-    home, data, source, ctx = guided
-    before_sources = list_source_optins()
-    monkeypatch.setattr(sources, 'probe_source', lambda _: pytest.fail('none cannot probe'))
-    out = preview(guided, evaluation='yes')
-    for text in ('bounded', 'eligible owner-DM', 'tool-free', 'default model/provider',
-                 'verified Hermes pricing', '1.5 EUR/USD', 'local cues', 'cost nothing',
-                 'not an invoice', '€5', 'fail', 'no retries or fallback', 'chosen provider'):
-        assert text in out
-    expected = {'enabled': True, 'consent': 'owner-dm-excerpts-v1', 'approved_by': 'telegram:42',
-                'route': 'runtime-default', 'monthly_limit_microeur': 5_000_000}
-    staged = json.loads((data / 'setup-state.json').read_text())['policy']
-    assert staged['private_chat_evaluation'] == expected
-    assert private_chat_evaluation_policy(staged) == expected
-    assert not (home / 'hermes-tingle.json').exists()
-    reply(ctx, source, 'confirm-destination', 'telegram:123')
-    assert not (home / 'hermes-tingle.json').exists()
-    assert 'policy saved' in reply(ctx, source, 'confirm', 'WRITE')
-    saved = json.loads((home / 'hermes-tingle.json').read_text())
-    assert saved == staged and private_chat_evaluation_policy(saved) == expected
-    assert list_source_optins() == before_sources
-    assert len(ctx.questions) == 1 and not ctx.jobs  # Only separate job consent.
-
-
-def test_guided_evaluation_no_omits_consent(guided):
-    home, data, source, ctx = guided
-    preview(guided)
-    assert 'private_chat_evaluation' not in json.loads((data / 'setup-state.json').read_text())['policy']
-    reply(ctx, source, 'confirm-destination', 'telegram:123')
-    reply(ctx, source, 'confirm', 'WRITE')
-    assert 'private_chat_evaluation' not in json.loads((home / 'hermes-tingle.json').read_text())
-
-
-@pytest.mark.parametrize('answer', ['YES', 'Yes', 'true', 'enable', 'yes please', ''])
-def test_guided_evaluation_requires_exact_yes_no(guided, answer):
-    home, data, source, ctx = guided
-    ctx.command('setup', source=source)
-    for field, value in ANSWERS:
-        if field == 'evaluation':
-            break
-        out = reply(ctx, source, field, value)
-    assert 'OFF' in out and 'yes' in out and 'no' in out
-    assert 'discarded' in reply(ctx, source, 'evaluation', answer)
-    assert not (data / 'setup-state.json').exists()
-    assert not (home / 'hermes-tingle.json').exists() and not ctx.questions
-
-
-@pytest.mark.parametrize('commands', [
-    [('cancel', '')],
-    [('confirm', 'WRITE')],
-    [('confirm-destination', 'telegram:999')],
-    [('confirm-destination', 'telegram:123'), ('confirm', 'write')],
-])
-def test_guided_evaluation_yes_does_not_bypass_cancel_destination_or_write(guided, commands):
-    home, data, source, ctx = guided
-    preview(guided, evaluation='yes')
-    for field, value in commands:
-        out = reply(ctx, source, field, value)
-    assert 'discarded' in out
-    assert not (home / 'hermes-tingle.json').exists() and not (data / 'setup-state.json').exists()
-    assert not ctx.questions and not ctx.jobs
-
-
-def test_guided_policy_write_then_separate_job_consent(guided):
+def test_setup_keeps_private_chat_filter_off(guided):
     home, data, source, ctx = guided
     out = preview(guided)
-    for value in ('telegram:123', 'Europe/Berlin', '0 0,8,16 * * *', '30', '09:00', '18:00', 'owner_principals', 'none'):
-        assert value in out
-    assert 'model' in out and 'history' in out
-    assert 'confirm-destination' in out
-    assert 'WRITE' in reply(ctx, source, 'confirm-destination', 'telegram:123')
+    state = json.loads((data / 'setup-state.json').read_text())
+
+    assert 'private_chat_evaluation' not in state['policy']
+    assert 'separate AI filter for private chat suggestions stays off' in out
+    assert 'optional private discovery evaluation' not in out
+    assert 'no Tingle spending ceiling' not in out
+
     result = reply(ctx, source, 'confirm', 'WRITE')
-    assert 'policy saved' in result.lower() and 'cancelled' in result
-    policy = json.loads((home / 'hermes-tingle.json').read_text())
-    assert policy['owner_principals'] == ['telegram:42']
-    assert policy['delivery'] == 'telegram:123'
-    assert (home / 'hermes-tingle.json').stat().st_mode & 0o777 == 0o600
+    saved = json.loads((home / 'hermes-tingle.json').read_text())
+    assert 'private_chat_evaluation' not in saved
+    assert 'scheduled' in result
+    assert len(ctx.jobs) == 2
     assert len(ctx.questions) == 1
-    assert any(c['label'] == 'Create both jobs' for c in ctx.questions[0][1])
-    assert not ctx.jobs and not (home / 'scripts').exists()
-    ctx.answer = 'create'
-    assert 'is scheduled' in ctx.command('setup', source=source)
+
+
+def test_guided_policy_write_and_job_creation_need_only_one_approval(guided):
+    home, data, source, ctx = guided
+    (home / 'config.yaml').write_text('timezone: Europe/Berlin\n')
+    out = preview(guided)
+    for value in ('telegram:42', 'Europe/Berlin', '00:00, 08:00 and 16:00', '30 minutes', '09:00', '09:00–18:00'):
+        assert value in out
+    assert 'Gmail' in out and 'read-only' in out and 'configured AI provider' in out
+    assert 'confirm-destination' not in out
+    assert '`/tingle setup confirm WRITE`' in out
+    assert not (home / 'hermes-tingle.json').exists()
+    assert not ctx.jobs
+
+    result = reply(ctx, source, 'confirm', 'WRITE')
+    policy = json.loads((home / 'hermes-tingle.json').read_text())
+    assert 'scheduled' in result.lower()
+    assert policy['owner_principals'] == ['telegram:42']
+    assert policy['delivery'] == 'telegram:42'
+    assert policy['timezone'] == 'Europe/Berlin'
+    assert (home / 'hermes-tingle.json').stat().st_mode & 0o777 == 0o600
+    assert len(ctx.questions) == 1  # The only question was the start approval.
     assert len(ctx.jobs) == 2
     assert (home / 'scripts' / 'hermes_tingle_due.py').exists()
     assert not (data / 'setup-state.json').exists()
@@ -230,25 +327,41 @@ def test_only_preprovisioned_owner_in_verified_dm_can_start(guided, change, expe
     assert not ctx.questions and not ctx.jobs
 
 
-@pytest.mark.parametrize('commands', [
-    [('confirm-destination', 'telegram:999')],
-    [('confirm-destination', 'telegram:123'), ('confirm', 'write')],
-    [('confirm-destination', 'telegram:123'), ('confirm', 'Write')],
-    [('cancel', '')],
-    [('owner', 'telegram:99')],
-    [('review', "'unsupported")],
+@pytest.mark.parametrize(('field', 'value'), [
+    ('evaluation', 'yes'),
+    ('sources', 'none'),
+    ('confirm', 'write'),
+    ('confirm', 'Write'),
 ])
-def test_bad_confirmation_cancel_or_unsupported_reply_discards_draft(guided, commands):
+def test_bad_fresh_setup_reply_keeps_draft_at_approval(guided, field, value):
     home, data, source, ctx = guided
     preview(guided)
-    for field, value in commands:
-        out = reply(ctx, source, field, value)
+    draft = data / 'setup-state.json'
+    before = draft.read_bytes()
+
+    out = reply(ctx, source, field, value)
+
+    assert draft.read_bytes() == before
+    assert 'Nothing changed' in out
+    assert '`/tingle setup confirm WRITE`' in out
     assert not (home / 'hermes-tingle.json').exists()
+    assert not ctx.jobs
+    result = reply(ctx, source, 'confirm', 'WRITE')
+    assert 'scheduled' in result
+    assert (home / 'hermes-tingle.json').exists()
+    assert not draft.exists()
+
+
+def test_setup_cancel_discards_pending_draft_without_side_effects(guided):
+    home, data, source, ctx = guided
+    preview(guided)
+
+    out = reply(ctx, source, 'cancel', '')
+
+    assert 'cancelled' in out.lower() or 'not now' in out.lower()
     assert not (data / 'setup-state.json').exists()
-    assert not ctx.questions and not ctx.jobs
-    assert 'discarded' in out
-    reply(ctx, source, 'confirm', 'WRITE')
     assert not (home / 'hermes-tingle.json').exists()
+    assert not ctx.jobs
 
 
 def test_profile_switch_invalidates_old_draft(guided, monkeypatch):
@@ -258,7 +371,7 @@ def test_profile_switch_invalidates_old_draft(guided, monkeypatch):
     other = home / 'another-profile'
     other.mkdir()
     monkeypatch.setattr(hermes_constants, 'get_hermes_home', lambda: other)
-    assert 'profile changed' in reply(ctx, source, 'confirm-destination', 'telegram:123')
+    assert 'profile changed' in reply(ctx, source, 'confirm', 'WRITE')
     assert not (other / 'hermes-tingle.json').exists()
     assert not (data / 'setup-state.json').exists()
     monkeypatch.setattr(hermes_constants, 'get_hermes_home', lambda: home)
@@ -269,12 +382,40 @@ def test_profile_switch_invalidates_old_draft(guided, monkeypatch):
 def test_existing_valid_policy_still_requires_known_dm_type(guided):
     home, data, source, ctx = guided
     preview(guided)
-    reply(ctx, source, 'confirm-destination', 'telegram:123')
     reply(ctx, source, 'confirm', 'WRITE')
     source.chat_type = 'unknown'
     out = ctx.command('setup', source=source)
     assert 'direct message' in out
     assert len(ctx.questions) == 1
+
+
+def test_valid_existing_policy_setup_activates_jobs_without_rewriting_policy(guided):
+    import copy
+    import hermes_tingle_store as store
+    from hermes_tingle_policy import DEFAULTS, validate_settings
+
+    home, data, source, ctx = guided
+    policy = copy.deepcopy(DEFAULTS)
+    policy.update(
+        owner_principals=['telegram:42'], delivery='telegram:42',
+        timezone='Pacific/Honolulu', daily_schedule='15 6 * * 1-5',
+    )
+    validate_settings(policy)
+    policy_path = home / 'hermes-tingle.json'
+    policy_path.write_text(json.dumps(policy))
+    before_policy = policy_path.read_bytes()
+    before_sources = store.list_source_optins()
+    ctx.answer = 'create'
+
+    out = plugin.handle_command(ctx, 'setup', source=source)
+
+    assert 'scheduled' in out.lower()
+    assert len(ctx.questions) == 1
+    assert [choice['value'] for choice in ctx.questions[0][1]] == ['create', 'cancel']
+    assert len(ctx.jobs) == 2
+    assert policy_path.read_bytes() == before_policy
+    assert store.list_source_optins() == before_sources
+    assert not (data / 'setup-state.json').exists()
 
 
 @pytest.mark.parametrize('change', ['authority', 'policy', 'timeout', 'path'])
@@ -289,16 +430,15 @@ def test_changed_authority_policy_timeout_or_profile_identity_cannot_commit(guid
     elif change == 'timeout':
         monkeypatch.setattr(setup.time, 'time', lambda: float('inf'))
     else:
-        # Same spelling, different profile directory identity.
         moved = home.with_name(home.name + '-moved')
         home.rename(moved)
         home.mkdir()
         import shutil
         shutil.copytree(moved / 'plugin-data', home / 'plugin-data')
-    out = reply(ctx, source, 'confirm-destination', 'telegram:123')
+    out = reply(ctx, source, 'confirm', 'WRITE')
     assert 'discarded' in out
     assert not (data / 'setup-state.json').exists()
-    assert not ctx.questions and not ctx.jobs
+    assert len(ctx.questions) == 1 and not ctx.jobs
     if change == 'policy':
         assert (home / 'hermes-tingle.json').read_text() == '{broken'
     else:
@@ -310,10 +450,10 @@ def test_cross_chat_reply_cannot_advance_or_cancel_owner_draft(guided):
     preview(guided)
     before = (data / 'setup-state.json').read_bytes()
     elsewhere = SimpleNamespace(**{**vars(source), 'chat_id': '999'})
-    assert 'different owner or chat' in reply(ctx, elsewhere, 'confirm-destination', 'telegram:123')
+    assert 'different owner or chat' in reply(ctx, elsewhere, 'confirm', 'WRITE')
     assert 'different owner or chat' in reply(ctx, elsewhere, 'cancel', '')
     assert (data / 'setup-state.json').read_bytes() == before
-    assert not ctx.jobs and not ctx.questions
+    assert not ctx.jobs and len(ctx.questions) == 1
 
 
 def test_tool_missing_policy_never_sends_owner_to_python(guided):
@@ -321,7 +461,7 @@ def test_tool_missing_policy_never_sends_owner_to_python(guided):
     assert 'operator' in out and 'tingle_init.py' not in out
 
 
-def test_no_source_probe_or_grant_until_write_even_with_all_selected(guided, monkeypatch):
+def test_no_source_probe_or_grant_until_single_start_approval(guided, monkeypatch):
     import hermes_tingle_sources as sources
     import hermes_tingle_store as store
     home, data, source, ctx = guided
@@ -337,30 +477,28 @@ def test_no_source_probe_or_grant_until_write_even_with_all_selected(guided, mon
         probes.append(kind)
         return 'a' * 64 if kind in ('email', 'calendar') else None
     monkeypatch.setattr(sources, 'probe_source', probe)
-    ctx.command('setup', source=source)
-    for field, value in ANSWERS:
-        reply(ctx, source, field, 'all' if field == 'sources' else value)
+    out = preview(guided)
     assert not probes and store.list_source_optins() == before
-    reply(ctx, source, 'confirm-destination', 'telegram:123')
+    assert not (home / 'hermes-tingle.json').exists() and not ctx.jobs
+
     out = reply(ctx, source, 'confirm', 'WRITE')
     assert probes == ['email', 'calendar', 'chat']
     assert all(store.source_enabled(kind) for kind in ('email', 'calendar', 'chat'))
-    assert 'policy saved' in out and 'cancelled' in out
-    assert not ctx.jobs
+    assert 'scheduled' in out and len(ctx.jobs) == 2
     assert len(ctx.questions) == 1
 
 
 def test_job_confirmation_holds_no_policy_mutation_lock(guided):
     import hermes_tingle_resources as resources
     home, data, source, ctx = guided
-    preview(guided)
-    reply(ctx, source, 'confirm-destination', 'telegram:123')
-    ask = ctx.ask_choice
     def unlocked(*args):
         assert home not in getattr(resources._local, 'held', {})
-        return ask(*args)
+        return None
     ctx.ask_choice = unlocked
-    assert 'policy saved' in reply(ctx, source, 'confirm', 'WRITE')
+    out = plugin.handle_command(ctx, '', source=source)
+    assert '`/tingle setup confirm WRITE`' in out
+    assert 'scheduled' in reply(ctx, source, 'confirm', 'WRITE')
+    assert len(ctx.jobs) == 2
 
 
 @pytest.mark.parametrize('mode', ['maintenance', 'owner-symlink', 'state-symlink'])
@@ -375,26 +513,24 @@ def test_maintenance_or_symlink_refuses_cleanly_without_outside_writes(guided, m
         target = data / ('setup-owner.json' if mode == 'owner-symlink' else 'setup-state.json')
         target.unlink()
         target.symlink_to(outside)
-    out = reply(ctx, source, 'confirm-destination', 'telegram:123')
+    out = reply(ctx, source, 'confirm', 'WRITE')
     assert 'stopped' in out.lower() or 'operator' in out
     assert outside.read_text() == 'synthetic untouched'
     assert not (home / 'hermes-tingle.json').exists()
-    assert not ctx.questions and not ctx.jobs
+    assert len(ctx.questions) == 1 and not ctx.jobs
 
 
-def test_profile_home_switch_while_waiting_for_jobs_cannot_create(guided, monkeypatch):
+def test_profile_home_switch_while_waiting_for_start_cannot_create(guided, monkeypatch):
     import hermes_constants
     home, data, source, ctx = guided
-    preview(guided)
-    reply(ctx, source, 'confirm-destination', 'telegram:123')
     other = home / 'other'
     other.mkdir()
     def switch(*args):
         monkeypatch.setattr(hermes_constants, 'get_hermes_home', lambda: other)
-        return 'create'
+        return 'start'
     ctx.ask_choice = switch
-    out = reply(ctx, source, 'confirm', 'WRITE')
-    assert 'policy saved' in out and 'stopped' in out
+    out = plugin.handle_command(ctx, '', source=source)
+    assert 'profile' in out.lower() and ('discarded' in out.lower() or 'changed' in out.lower())
     assert not ctx.jobs and not (home / 'scripts').exists()
     assert not (other / 'hermes-tingle.json').exists()
 
@@ -413,7 +549,7 @@ def test_expired_draft_cannot_be_resumed_after_host_reload(guided, monkeypatch):
     preview(guided)
     monkeypatch.setattr(setup, '_active_profiles', {})
     monkeypatch.setattr(setup.time, 'time', lambda: float('inf'))
-    assert 'discarded' in reply(ctx, source, 'confirm-destination', 'telegram:123')
+    assert 'discarded' in reply(ctx, source, 'confirm', 'WRITE')
     assert not (home / 'hermes-tingle.json').exists()
 
 
@@ -431,13 +567,12 @@ def test_fresh_attestation_allows_admission_created_database(guided, monkeypatch
     assert (data / 'synthetic-storage.db').exists()
     with connect(None) as conn:
         assert conn.execute('SELECT count(*) FROM known_chats').fetchone()[0] == 1
-    assert '/tingle setup destination <value>' in ctx.command('setup', source=source)
+    assert '`/tingle setup confirm WRITE`' in preview(guided)
 
 
 def test_bootstrap_is_consumed_so_lost_policy_cannot_reconstruct_defaults(guided):
     home, data, source, ctx = guided
     preview(guided)
-    reply(ctx, source, 'confirm-destination', 'telegram:123')
     reply(ctx, source, 'confirm', 'WRITE')
     assert (data / 'setup-consumed.json').exists()
     (home / 'hermes-tingle.json').unlink()
@@ -457,11 +592,8 @@ def test_owner_only_fragment_without_fresh_install_attestation_refuses(guided):
 def test_guided_write_reuses_verified_creation_and_partial_failure_rollback(guided, partial_failure):
     home, data, source, ctx = guided
     preview(guided)
-    reply(ctx, source, 'confirm-destination', 'telegram:123')
-    ctx.answer = 'create'
     ctx.fail_create = partial_failure
     out = reply(ctx, source, 'confirm', 'WRITE')
-    assert 'policy saved' in out
     if partial_failure:
         assert 'rolled back' in out and not ctx.jobs
     else:
@@ -469,13 +601,13 @@ def test_guided_write_reuses_verified_creation_and_partial_failure_rollback(guid
         assert "hermes gateway restart" in out and "/new" in out and "separate terminal" in out
     assert (home / 'hermes-tingle.json').exists()
     assert (home / 'scripts' / 'hermes_tingle_due.py').exists()
+    assert not (data / 'setup-state.json').exists()
 
 
 def test_consumed_bootstrap_cannot_be_retried_after_failed_write(guided, monkeypatch):
     import hermes_tingle_setup as setup
     home, data, source, ctx = guided
     preview(guided)
-    reply(ctx, source, 'confirm-destination', 'telegram:123')
     def fail(*args):
         raise OSError('synthetic private diagnostic')
     monkeypatch.setattr(setup, 'write_policy', fail)
@@ -486,7 +618,7 @@ def test_consumed_bootstrap_cannot_be_retried_after_failed_write(guided, monkeyp
     assert 'operator' in reply(ctx, source, 'confirm', 'WRITE')
 
 
-def test_none_source_choice_has_no_probe_or_grant(guided, monkeypatch):
+def test_not_now_does_not_probe_or_grant_sources(guided, monkeypatch):
     import sqlite3
     import hermes_tingle_sources as sources
     import hermes_tingle_store as store
@@ -497,11 +629,16 @@ def test_none_source_choice_has_no_probe_or_grant(guided, monkeypatch):
         return conn
     monkeypatch.setattr(store, 'plugin_db', connect)
     before = store.list_source_optins()
-    monkeypatch.setattr(sources, 'probe_source', lambda _: pytest.fail('source opt-out cannot probe'))
-    preview(guided)
-    reply(ctx, source, 'confirm-destination', 'telegram:123')
-    assert 'policy saved' in reply(ctx, source, 'confirm', 'WRITE')
+    monkeypatch.setattr(sources, 'probe_source', lambda _: pytest.fail('cancel cannot probe'))
+    ctx.answer = 'cancel'
+
+    out = plugin.handle_command(ctx, '', source=source)
+
+    assert 'not now' in out.lower()
     assert store.list_source_optins() == before
+    assert not (home / 'hermes-tingle.json').exists()
+    assert not (data / 'setup-state.json').exists()
+    assert not ctx.jobs
 
 
 def test_draft_and_consumed_marker_renames_are_directory_durable(guided, monkeypatch):
@@ -518,10 +655,9 @@ def test_draft_and_consumed_marker_renames_are_directory_durable(guided, monkeyp
     monkeypatch.setattr(setup.os, 'fsync', synced)
     preview(guided)
     assert directory_syncs  # Draft renames survive a crash, not just file bytes.
-    reply(ctx, source, 'confirm-destination', 'telegram:123')
     real_writer = setup.write_policy
     def checked_write(*args):
         assert any(directory_syncs)  # Consumption is durable before policy commit.
         return real_writer(*args)
     monkeypatch.setattr(setup, 'write_policy', checked_write)
-    assert 'policy saved' in reply(ctx, source, 'confirm', 'WRITE')
+    assert 'scheduled' in reply(ctx, source, 'confirm', 'WRITE')

@@ -1,4 +1,4 @@
-"""Typed, authenticated owner-DM setup. Drafts are not runtime policy or grants."""
+"""Authenticated owner-DM first-run setup; drafts are not runtime policy or grants."""
 from __future__ import annotations
 
 import copy
@@ -10,6 +10,7 @@ import stat
 import tempfile
 import time
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
     from . import hermes_tingle_resources as resources
@@ -24,7 +25,7 @@ except ImportError:
 
 PROVISIONING = (
     'No Tingle owner is configured here. New profiles take the owner from the configured home channel, '
-    'so `/tingle setup` in the owner DM is enough. Older or broken profiles need operator repair; use '
+    'so `/tingle` in the owner DM is enough. Older or broken profiles need operator repair; use '
     '`setup-owner.json` only when the home channel is not a DM. Nothing changed.'
 )
 OWNER = 'setup-owner.json'
@@ -65,6 +66,52 @@ def _config_document(home):
     if not isinstance(document, dict):
         return None, None
     return document, config
+
+
+def _valid_timezone(candidate):
+    if not isinstance(candidate, str) or not candidate.strip():
+        return None
+    candidate = candidate.strip()
+    try:
+        ZoneInfo(candidate)
+    except (TypeError, ValueError, ZoneInfoNotFoundError):
+        return None
+    return candidate
+
+
+def _system_timezone():
+    candidate = _valid_timezone(os.environ.get('TZ'))
+    if candidate:
+        return candidate
+    try:
+        zoneinfo = Path('/usr/share/zoneinfo').resolve(strict=True)
+        localtime = Path('/etc/localtime').resolve(strict=True)
+        candidate = localtime.relative_to(zoneinfo).as_posix()
+        if _valid_timezone(candidate):
+            return candidate
+    except (OSError, ValueError):
+        pass
+    return DEFAULTS['timezone']
+
+
+def _profile_timezone(home):
+    """Use Hermes's active-profile timezone; a multiplexed env value may belong to default."""
+    try:
+        import hermes_time
+        get_timezone_name = hermes_time.get_timezone_name
+    except (ImportError, AttributeError):
+        get_timezone_name = None
+    if callable(get_timezone_name):
+        try:
+            return _valid_timezone(get_timezone_name()) or _system_timezone()
+        except Exception:
+            return _system_timezone()
+
+    # Compatibility fallback for a missing Hermes clock module: use only this
+    # profile's file. A process env var can describe another profile.
+    document, _config = _config_document(home)
+    configured = document.get('timezone') if isinstance(document, dict) else None
+    return _valid_timezone(configured) or _system_timezone()
 
 
 def _no_duplicate_keys(pairs):
@@ -309,34 +356,66 @@ def _save(home, path, state):
 def _prompt(state):
     field = FIELDS[state['step']]
     hints = {
-        'destination': 'Where should reminders go? Reply `/tingle setup here` to use this chat (`'
-                       + ':'.join((state['binding'][0], state['binding'][2])) + '`), or give an explicit '
-                       'destination like `telegram:<chat-id>[:<topic-id>]`. `/tingle identity` shows IDs; '
-                       'your sender ID is not always the chat destination.',
-        'timezone': 'Which IANA timezone? Example: Europe/Berlin (default suggestion: Etc/UTC).',
-        'review': 'Which review cron? Suggestion: 0 0,8,16 * * * (00:00, 08:00, 16:00 in your timezone).',
-        'deadline': 'How many minutes between script-only deadline checks? Suggestion: 30; range 1–1440.',
-        'date-only': 'What local time for date-only deadlines? HH:MM; suggestion: 09:00.',
-        'availability': 'What same-day availability window? Two HH:MM times, e.g. 09:00 18:00.',
-        'sources': 'Gmail, Google Calendar and chat are proposed ON (all). Reply all to approve minimal connection checks and grants only after WRITE, or none to keep them off. Gmail is bounded mail/sent follow-ups; Calendar is read-only (including organizer/count context); chat covers this profile’s known chats, with /tingle chat exclude available later. Google Drive is not a source. A failed check stays off. No account/message read has happened.',
-        'evaluation': EVALUATION_DISCLOSURE + ' Enable private evaluation? Reply yes for the recommended €5 cap, no-cap for NO Tingle cap, or no for OFF; default suggestion: no (OFF).',
-        'exclusions': 'Which source/work exclusions? Reply with one JSON object containing all four string lists: ' + json.dumps({k: [] for k in EXCLUSIONS}) + '. Empty lists exclude nothing.',
+        'destination': 'Reminders go to the verified chat shown here by default. To change it, enter one destination such as telegram:<chat-id>[:<topic-id>].',
+        'timezone': 'Which timezone should Tingle use? Use an IANA name such as Europe/Berlin.',
+        'review': 'When should Tingle check for follow-ups? Example: 0 0,8,16 * * * for 00:00, 08:00 and 16:00.',
+        'deadline': 'How often should Tingle check for due reminders? Enter minutes; 30 is the standard.',
+        'date-only': 'If a deadline has a date but no time, what local time should Tingle use? Example: 09:00.',
+        'availability': 'For meeting suggestions today, what hours should count as available? Example: 09:00 18:00.',
+        'sources': 'Choose whether to turn Gmail, Google Calendar and chats on. Google Drive is not included. Reply all or none.',
+        'evaluation': EVALUATION_DISCLOSURE + ' Choose yes for a €5 cap, `no-cap` for no monthly spending cap, or no to keep it off.',
+        'exclusions': 'Which calendars, work areas, sources or ticket patterns should Tingle ignore? Use one JSON object with all four string lists: ' + json.dumps({k: [] for k in EXCLUSIONS}) + '. Empty lists exclude nothing.',
     }
-    return hints[field] + '\nReply `/tingle setup ' + field + ' <value>`. Cancel with `/tingle setup cancel`. Draft expires 30 minutes after start.'
+    return (hints[field] + '\nReply `/tingle setup ' + field + ' <value>`. '
+            'Cancel with `/tingle setup cancel`. Draft expires 30 minutes after start.')
+
+
+def _approval_prompt(state):
+    try:
+        from . import hermes_tingle_sources as sources
+    except ImportError:
+        import hermes_tingle_sources as sources
+    policy = state['policy']
+    return f"""Start Tingle with these defaults?
+
+• Reminders go to this chat: `{policy['delivery']}`.
+• Follow-up reviews run at 00:00, 08:00 and 16:00 in `{policy['timezone']}`.
+• Due reminders are checked every {policy['deadline_poll_minutes']} minutes.
+• Date-only deadlines use {policy['date_only_time']}; today's calendar suggestions use {policy['availability_start']}–{policy['availability_end']}.
+• Reads Gmail for follow-ups, upcoming Google Calendar events (read-only; event context may include organizers and attendees), and chats already seen by this profile, including groups. Google Drive is not included.
+• The separate AI filter for private chat suggestions stays off.
+
+{sources.source_privacy_notice()}
+
+Starting checks the source connections and creates the scheduled review and reminder jobs. It sends no test message. Nothing has changed yet."""
 
 
 def _preview(state):
-    return ('Review every value (nothing applied yet):\n' + json.dumps(state['policy'], indent=2, ensure_ascii=False)
-            + '\nSource choice: ' + state['sources']
-            + '\nPrivate evaluation consent: ' + ('enabled' if 'private_chat_evaluation' in state['policy'] else 'disabled')
-            + '\n' + EVALUATION_DISCLOSURE
-            + '\nTracker data stays on this host. Approved source content and tracked details may go to your configured '
-              'model provider, Hermes history/logs and chosen messaging gateway. No Tingle-operated telemetry service is added. '
-              'Revocation does not erase prior copies. See README Privacy and data. '
-              'WRITE saves global profile policy, the selected evaluation consent, and consents to the selected source connection checks/grants; '
-              'helpers and jobs require separate Create both jobs consent. No test message is sent.\n'
-              'Retype the exact destination with `/tingle setup confirm-destination <value>`. '
-              'Cancel with `/tingle setup cancel`.')
+    return (_approval_prompt(state) + '\n\nChoose **Start Tingle** or send '
+            '`/tingle setup confirm WRITE`. To leave, send `/tingle setup cancel`.')
+
+
+def _legacy_preview(state):
+    return f"""Review every value (nothing applied yet):
+{json.dumps(state['policy'], indent=2, ensure_ascii=False)}
+Source choice: {state['sources']}
+Private-chat suggestion filter: {'enabled' if 'private_chat_evaluation' in state['policy'] else 'disabled'}
+{EVALUATION_DISCLOSURE}
+Tracker data stays on this host. Approved source content and tracked details may go to your configured model provider, Hermes history/logs and chosen messaging gateway. No Tingle-operated telemetry service is added. Revocation does not erase prior copies. See README Privacy and data.
+WRITE saves profile policy and the selected source checks/grants. Jobs still need the separate Create both jobs approval. No test message is sent.
+Retype the exact destination with `/tingle setup confirm-destination <value>`. Cancel with `/tingle setup cancel`."""
+
+
+def _retry(state):
+    if state.get('step') == 'approval':
+        return 'That did not match the approval. Nothing changed.\n\n' + _preview(state)
+    if isinstance(state.get('step'), int) and state['step'] < len(FIELDS):
+        return 'That answer did not work. Nothing changed. Try this step again:\n' + _prompt(state)
+    if state.get('step') == len(FIELDS):
+        return ('The destination did not match. Nothing changed. Retype the destination or cancel with '
+                '`/tingle setup cancel`.')
+    return ('The confirmation did not match. Nothing changed. Reply `/tingle setup confirm WRITE` '
+            'or cancel with `/tingle setup cancel`.')
 
 
 def _apply(state, field, value):
@@ -386,6 +465,8 @@ def handle(ctx, raw, source):
     value = value.strip()
     state = None
     activation = None
+    approval_needed = False
+    approval_accepted = False
     write_attempted = False
     try:
         binding = _binding(source)
@@ -399,7 +480,7 @@ def handle(ctx, raw, source):
             with resources.mutation(previous):
                 old_state.unlink(missing_ok=True)
             _active_profiles.pop(binding, None)
-            return 'Setup stopped: active profile changed. Start /tingle setup again; no policy, sources or jobs changed.'
+            return 'Setup stopped: active profile changed. Start `/tingle setup` again; no policy, sources or jobs changed.'
         resources.safe(data_dir, home)
         if field == 'refresh-review' and not value:
             if state_path.exists():
@@ -428,7 +509,7 @@ def handle(ctx, raw, source):
             except ValueError:
                 return PROVISIONING
             if field:
-                return 'No setup draft in this profile. Existing valid policy was not edited; /tingle setup previews job activation.'
+                return 'No setup draft in this profile. Existing valid policy was not edited; `/tingle setup` previews job activation.'
             return setup_jobs.setup_from_command(ctx, source=source)
         consumed = resources.safe(data_dir / 'setup-consumed.json', home)
         if consumed.exists():
@@ -445,7 +526,7 @@ def handle(ctx, raw, source):
                 field, value = 'destination', 'here'
             if state is None:
                 if field:
-                    return 'No setup draft in this profile. Start /tingle setup in the owner DM; nothing changed.'
+                    return 'No setup draft in this profile. Start `/tingle setup` in the owner DM; nothing changed.'
                 if snapshot(home) is not None:
                     raise ValueError('Profile policy changed')
                 if consumed.exists():
@@ -453,11 +534,13 @@ def handle(ctx, raw, source):
                 # The operator explicitly attests a fresh install; admission may
                 # already have initialized chat metadata in the plugin database.
                 candidate = copy.deepcopy(DEFAULTS)
-                candidate.update(owner_principals=owners, delivery='telegram:0')
+                candidate.update(owner_principals=owners,
+                                 delivery=':'.join((binding[0], binding[2])),
+                                 timezone=_profile_timezone(home))
                 state = {'home': str(home), 'home_identity': _identity(home), 'binding': binding,
                          'authority': authority, 'owner_identity': owner_identity, 'expires': time.time() + TTL,
                          'epoch': resources._mutation_epochs.get(home, 0),
-                         'step': 0, 'policy': candidate, 'sources': 'none'}
+                         'step': 'approval', 'policy': candidate, 'sources': 'all'}
                 _active_profiles[binding] = home
             else:
                 if (state['home'] != str(home) or state['home_identity'] != _identity(home)
@@ -466,20 +549,29 @@ def handle(ctx, raw, source):
                         or state['epoch'] != resources._mutation_epochs.get(home, 0)
                         or home_path.resolve(strict=True) != home or time.time() >= state['expires']):
                     raise ValueError('Profile, authority or policy changed, or draft expired')
-                if not field:
-                    state_path.unlink()
-                    return 'Setup stopped: unsupported reply; draft discarded. Start /tingle setup again. Nothing applied.'
-                if state['step'] < len(FIELDS):
-                    if field != FIELDS[state['step']] or not value:
-                        raise ValueError('Unsupported or out-of-order reply')
-                    _apply(state, field, value)
-                elif state['step'] == len(FIELDS):
+                step = state['step']
+                if step == 'approval':
+                    approval_needed = True
+                    if field == 'confirm' and value == 'WRITE':
+                        approval_accepted = True
+                    elif field:
+                        return _retry(state)
+                elif isinstance(step, int) and step < len(FIELDS):
+                    if not field or field != FIELDS[step] or not value:
+                        return _retry(state)
+                    candidate = copy.deepcopy(state)
+                    try:
+                        _apply(candidate, field, value)
+                    except (ValueError, TypeError, KeyError):
+                        return _retry(state)
+                    state = candidate
+                elif step == len(FIELDS):
                     if field != 'confirm-destination' or value != state['policy']['delivery']:
-                        raise ValueError('Destination retype did not match exactly')
+                        return _retry(state)
                     state['step'] += 1
                 else:
                     if field != 'confirm' or value != 'WRITE':
-                        raise ValueError('Final confirmation must be exactly WRITE')
+                        return _retry(state)
                     validate_settings(state['policy'])
                     # Check again at the actual commit boundary, not just at dispatch.
                     if (_authority(home, data_dir, source)[2:] != (authority, owner_identity)
@@ -489,8 +581,6 @@ def handle(ctx, raw, source):
                     if consumed.exists():
                         raise ValueError('Setup bootstrap already consumed')
                     write_attempted = True
-                    # Consume the one-shot fresh-install authority *before* the
-                    # write. A crash requires operator inspection, not defaults.
                     _save(home, consumed, {'authority': authority})
                     write_policy(home, state['policy'], None)
                     state_path.unlink()
@@ -498,11 +588,62 @@ def handle(ctx, raw, source):
                     activation = state
             if activation is None:
                 _save(home, state_path, state)
-                if state['step'] < len(FIELDS):
+                if state.get('step') == 'approval':
+                    approval_needed = True
+                elif state['step'] < len(FIELDS):
                     return _prompt(state)
-                if state['step'] == len(FIELDS):
-                    return _preview(state)
-                return 'Destination matched. Write this global profile policy? Reply `/tingle setup confirm WRITE` (uppercase, exact). Or `/tingle setup cancel`.'
+                elif state['step'] == len(FIELDS):
+                    return _legacy_preview(state)
+                else:
+                    return 'Destination matched. Write this global profile policy? Reply `/tingle setup confirm WRITE` (uppercase, exact). Or `/tingle setup cancel`.'
+        if approval_needed:
+            if not approval_accepted:
+                try:
+                    choice = ctx.ask_choice(
+                        _approval_prompt(state),
+                        [
+                            {'value': 'start', 'label': 'Start Tingle'},
+                            {'value': 'cancel', 'label': 'Not now'},
+                        ],
+                    )
+                except Exception:
+                    choice = None
+                if choice == 'cancel':
+                    with resources.mutation(home):
+                        current = json.loads(_read(state_path)) if state_path.exists() else None
+                        if (current is None or json.dumps(current, sort_keys=True) !=
+                                json.dumps(state, sort_keys=True)):
+                            return 'The setup changed while waiting. Nothing was applied; run `/tingle` to review again.'
+                        state_path.unlink()
+                    _active_profiles.pop(binding, None)
+                    return 'Not now. No settings, sources or jobs were changed.'
+                if choice != 'start':
+                    return 'No approval was recorded; nothing changed.\n\n' + _preview(state)
+                approval_accepted = True
+            if approval_accepted:
+                with resources.mutation(home):
+                    current = json.loads(_read(state_path)) if state_path.exists() else None
+                    if (current is None or json.dumps(current, sort_keys=True) !=
+                            json.dumps(state, sort_keys=True)
+                            or state['home'] != str(home) or state['home_identity'] != _identity(home)
+                            or tuple(state['binding']) != binding or state['authority'] != authority
+                            or state['owner_identity'] != owner_identity or snapshot(home) is not None
+                            or state['epoch'] != resources._mutation_epochs.get(home, 0)
+                            or home_path.resolve(strict=True) != home
+                            or Path(hermes_constants.get_hermes_home()).absolute() != home_path
+                            or time.time() >= state['expires']
+                            or _authority(home, data_dir, source)[2:] != (authority, owner_identity)
+                            or consumed.exists()):
+                        raise ValueError('Profile, authority or policy changed, or draft expired')
+                    validate_settings(state['policy'])
+                    write_attempted = True
+                    _save(home, consumed, {'authority': authority})
+                    write_policy(home, state['policy'], None)
+                    state_path.unlink()
+                    _active_profiles.pop(binding, None)
+                    activation = state
+        if activation is None:
+            return 'Setup is still waiting for your approval. Nothing changed.'
         # Never hold the policy/removal fence while a person is choosing. The
         # existing activation path captures and rechecks its own preview fence.
         saved = activation['policy']
@@ -513,8 +654,10 @@ def handle(ctx, raw, source):
                     or Path(hermes_constants.get_hermes_home()).absolute() != home_path
                     or load_settings(home) != saved):
                 raise ValueError('Profile, authority or policy changed; restart setup')
-        result = setup_jobs._activate_jobs(ctx, authorize=authorize, first_run_sources=activation['sources'])
-        return 'Validated policy saved. ' + result
+        result = setup_jobs._activate_jobs(
+            ctx, authorize=authorize, first_run_sources=activation['sources'],
+            first_run_create_jobs=activation.get('step') == 'approval')
+        return result if activation.get('step') == 'approval' else 'Validated policy saved. ' + result
     except OwnerRefused as exc:
         if state is None:
             return str(exc)
@@ -533,5 +676,5 @@ def handle(ctx, raw, source):
                     resources.safe(state_path, home).unlink(missing_ok=True)
             except (ValueError, OSError):
                 return 'Setup stopped; draft cleanup unavailable during maintenance/path change. Ask the operator before restarting setup. Nothing applied.'
-            return 'Setup stopped: unsupported reply, destination/WRITE mismatch, expired draft, or profile/authority/policy changed. Draft discarded; nothing applied. Start /tingle setup again.'
+            return 'Setup stopped: unsupported reply, destination/WRITE mismatch, expired draft, or profile/authority/policy changed. Draft discarded; nothing applied. Start `/tingle setup` again.'
         return PROVISIONING
