@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -25,13 +26,14 @@ def guided(tmp_path, monkeypatch):
         def __init__(self):
             super().__init__()
             self.questions = []
+            self.answers = []
             self.answer = 'cancel'
         def register_tool(self, **kwargs): pass
         def register_command(self, name, **kwargs): self.command = kwargs['handler']
         def register_skill(self, *args): pass
-        def ask_choice(self, question, choices):
+        def ask_choice(self, question, choices) -> Any:
             self.questions.append((question, choices))
-            return self.answer
+            return self.answers.pop(0) if self.answers else self.answer
 
     ctx = Context()
     monkeypatch.setattr(plugin, 'integrate', lambda _: None)
@@ -70,6 +72,25 @@ def preview(guided, evaluation=None):
     return out
 
 
+def test_successful_fresh_setup_offers_30_day_review_after_jobs(guided, monkeypatch):
+    import hermes_tingle_onboarding as onboarding
+    import hermes_tingle_setup as setup
+
+    home, data, source, ctx = guided
+    ctx.answer = "start"
+    order = []
+    monkeypatch.setattr(setup_jobs, "_activate_jobs", lambda *a, **k:
+                        order.append("jobs") or "Hermes Tingle is scheduled with the configured destination and schedule.")
+    monkeypatch.setattr(onboarding, "offer_after_setup", lambda context, actor:
+                        order.append(("lookback", actor)) or "Look-back choice shown.", raising=False)
+
+    out = plugin.handle_command(ctx, "", source=source)
+
+    assert order == ["jobs", ("lookback", source)]
+    assert "Look-back choice shown." in out
+    assert "lookback start 30" not in out
+
+
 def test_first_tingle_offers_one_approval_with_hermes_defaults(guided):
     home, data, source, ctx = guided
     (home / 'config.yaml').write_text(
@@ -103,6 +124,10 @@ def test_first_tingle_offers_one_approval_with_hermes_defaults(guided):
         'calendar_exclude_substrings', 'workstream_exclude_values',
         'source_exclude_substrings', 'ticket_exclude_patterns'))
     assert 'private_chat_evaluation' not in policy
+    assert all(emoji in question for emoji in ('📍', '🕰️', '⏰', '🤖'))
+    assert 'optional extra AI pass' in question
+    assert 'OFF' in question and 'separate consent' in question
+    assert 'configured AI model' in question and 'possibly cloud' in question
     assert not (home / 'hermes-tingle.json').exists()
     assert not ctx.jobs
     assert 'Europe/Berlin' in question and 'Gmail' in question and 'read-only' in question
@@ -152,7 +177,7 @@ def test_routed_profile_uses_hermes_timezone_not_default_process_timezone(guided
     assert state['policy']['timezone'] == 'Europe/Berlin'
 
 
-def test_first_approval_creates_jobs_and_checks_sources_without_second_prompt(guided, monkeypatch):
+def test_fresh_setup_completes_jobs_then_offers_private_30_day_review(guided, monkeypatch):
     import sqlite3
     import hermes_tingle_sources as sources
     import hermes_tingle_store as store
@@ -165,15 +190,22 @@ def test_first_approval_creates_jobs_and_checks_sources_without_second_prompt(gu
     monkeypatch.setattr(store, 'plugin_db', connect)
     checked = []
     monkeypatch.setattr(sources, 'probe_source', lambda kind: checked.append(kind) or ('a' * 64 if kind in ('email', 'calendar') else None))
-    ctx.answer = 'start'
+    ctx.answers = ['start', 'later']
 
     out = plugin.handle_command(ctx, '', source=source)
 
     assert 'scheduled' in out
     assert checked == ['email', 'calendar', 'chat']
     assert all(store.source_enabled(kind) for kind in ('email', 'calendar', 'chat'))
-    assert len(ctx.questions) == 1
+    assert len(ctx.questions) == 2
+    assert 'last 30 days' in ctx.questions[1][0]
     assert len(ctx.jobs) == 2
+    assert 'Sit back and relax' in out and 'automatically' in out
+    assert '`/tingle lookback start 30`' in out
+    assert store.get_plugin_meta('setup_lookback_offer_v1') == 'offered'
+    # The old empty-profile prompt must not appear on the next list command.
+    next_list = plugin.handle_command(ctx, '', source=source)
+    assert 'Welcome to Tingle' not in next_list and len(ctx.questions) == 2
     assert (home / 'hermes-tingle.json').exists()
     assert (home / 'scripts' / 'hermes_tingle_due.py').exists()
 
@@ -262,7 +294,8 @@ def test_setup_keeps_private_chat_filter_off(guided):
     state = json.loads((data / 'setup-state.json').read_text())
 
     assert 'private_chat_evaluation' not in state['policy']
-    assert 'separate AI filter for private chat suggestions stays off' in out
+    assert 'The optional extra AI pass for private-chat suggestions is OFF' in out
+    assert 'separate consent' in out and 'configured AI model' in out
     assert 'optional private discovery evaluation' not in out
     assert 'no Tingle spending ceiling' not in out
 
@@ -271,7 +304,7 @@ def test_setup_keeps_private_chat_filter_off(guided):
     assert 'private_chat_evaluation' not in saved
     assert 'scheduled' in result
     assert len(ctx.jobs) == 2
-    assert len(ctx.questions) == 1
+    assert len(ctx.questions) == 2
 
 
 def test_guided_policy_write_and_job_creation_need_only_one_approval(guided):
@@ -293,7 +326,7 @@ def test_guided_policy_write_and_job_creation_need_only_one_approval(guided):
     assert policy['delivery'] == 'telegram:42'
     assert policy['timezone'] == 'Europe/Berlin'
     assert (home / 'hermes-tingle.json').stat().st_mode & 0o777 == 0o600
-    assert len(ctx.questions) == 1  # The only question was the start approval.
+    assert len(ctx.questions) == 2  # Setup approval plus post-setup look-back choice.
     assert len(ctx.jobs) == 2
     assert (home / 'scripts' / 'hermes_tingle_due.py').exists()
     assert not (data / 'setup-state.json').exists()
@@ -386,7 +419,7 @@ def test_existing_valid_policy_still_requires_known_dm_type(guided):
     source.chat_type = 'unknown'
     out = ctx.command('setup', source=source)
     assert 'direct message' in out
-    assert len(ctx.questions) == 1
+    assert len(ctx.questions) == 2
 
 
 def test_valid_existing_policy_setup_activates_jobs_without_rewriting_policy(guided):
@@ -485,7 +518,7 @@ def test_no_source_probe_or_grant_until_single_start_approval(guided, monkeypatc
     assert probes == ['email', 'calendar', 'chat']
     assert all(store.source_enabled(kind) for kind in ('email', 'calendar', 'chat'))
     assert 'scheduled' in out and len(ctx.jobs) == 2
-    assert len(ctx.questions) == 1
+    assert len(ctx.questions) == 2
 
 
 def test_job_confirmation_holds_no_policy_mutation_lock(guided):

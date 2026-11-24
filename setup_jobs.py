@@ -24,6 +24,7 @@ DUE_NAME = "Tingle nudges"
 LEGACY_DAILY_NAME = "[SA] Hermes Tingle daily review"
 LEGACY_DUE_NAME = "[S] Hermes Tingle deadline nudges"
 KNOWN_JOB_NAMES = frozenset((DAILY_NAME, DUE_NAME, LEGACY_DAILY_NAME, LEGACY_DUE_NAME))
+JOB_SUCCESS_SENTENCE = "Hermes Tingle is scheduled with the configured destination and schedule."
 REVIEW_PROMPT_REFRESH_MARKER = "[Tingle review prompt update: untracked-suggestion disclosure v1]"
 REVIEW_PROMPT_REFRESH = (
     "\n\n" + REVIEW_PROMPT_REFRESH_MARKER + "\n"
@@ -335,11 +336,19 @@ def _offer_first_run_sources(ctx: Any, checked_settings, *, local: bool, selecte
             enabled.append(kind)
         except Exception:
             failed.append(kind)
+    chat_unavailable = "chat" in failed and "chat" not in sources.source_capabilities()
     if not failed:
         return "Sources on: email, calendar and chat (each verified with a minimal connection check)."
     if not enabled:
+        if chat_unavailable:
+            return ("No source could be verified with its minimal connection check, so all sources stay off. "
+                    "Chat history isn't available in this Hermes runtime; ask your operator to update the Tingle runtime, "
+                    "then enable it with `/tingle source enable chat`.")
         return ("No source could be verified with its minimal connection check, so all sources stay off. "
                 "Check the account/history wiring in Hermes, then enable with `/tingle source enable <kind>`.")
+    if chat_unavailable:
+        return ("Sources on: " + ", ".join(enabled) + ". Chat history isn't wired into this Hermes runtime, so it stayed off. "
+                "Ask your operator to update the Tingle runtime, then retry `/tingle source enable chat`.")
     return ("Sources on: " + ", ".join(enabled) + ". Could not be verified and left off: " + ", ".join(failed) +
             " - check the connection in Hermes, then `/tingle source enable <kind>`.")
 
@@ -657,7 +666,7 @@ def _activate_jobs_fenced(ctx: Any, *, authorize=None, first_run_sources=None, f
         except Exception:
             return _rollback(ctx, created_ids, baseline)
         return ((source_line + ' ' if first_run_create_jobs else '')
-                + f"Hermes Tingle is scheduled with the configured destination and schedule. Job IDs: {', '.join(created_ids)}. "
+                + JOB_SUCCESS_SENTENCE + f" Job IDs: {', '.join(created_ids)}. "
                   "Saved job definitions were verified; scheduler firing and delivery were not tested. "
                   "If a Tingle command, tool or action does not appear yet, have the operator restart the gateway from a separate terminal (`hermes gateway restart`) and then run `/new` in your DM - "
                   "an existing session can keep the old tool schema after an update.")

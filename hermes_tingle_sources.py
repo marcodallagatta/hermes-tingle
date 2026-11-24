@@ -2596,6 +2596,11 @@ def probe_source(kind: str) -> str | None:
     Discards probe metadata; it does not import source content or claim full scopes.
     """
     if kind not in source_capabilities():
+        if kind == "chat":
+            raise SourceReadError(
+                "Chat history isn't wired into this Hermes runtime, so no grant changed. "
+                "Ask your operator to update the Tingle runtime, then retry `/tingle source enable chat`; "
+                "this isn't a chat-account sign-in issue.")
         raise SourceReadError("Source capability is not installed/wired in this profile; no grant changed.")
     try:
         if kind == "email":

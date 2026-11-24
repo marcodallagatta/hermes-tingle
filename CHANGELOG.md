@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.16 - connected setup and private look-back
+
+- Setup uses emoji-led bullets and explains that the optional private-chat suggestion filter is a separate AI pass, stays off by default, and needs separate consent.
+- When setup succeeds, it offers a one-off 30-day Gmail review. The owner chooses model picks, scan-only or later; lead review starts immediately, every tracked item retains its final confirmation, and timed-out review decisions can resume with the shown command.
+- Look-back consent copy is shorter while keeping the coverage, private-staging, model-cost/history, no-auto-add, standing-scope and expiry-metadata facts. The completed review tells the owner Tingle will follow up automatically.
+- Chat source wiring now uses Hermes' public `list_gateway_sessions` plus `get_messages` interface; missing runtime wiring returns a precise repair instruction rather than blaming account sign-in.
+- Local verification: standalone **2,728 passed, 31 skipped, 243 warnings**; required Hermes runtime **2,762 passed, 5 skipped, 245 warnings** (the five runtime skips are the retired Drive-source tests). Privacy gate passed; plugin validation reports `ok: true`, `host_ready: true`, and the existing catalog rule-9 private-core-import warnings.
+
 ## 0.9.15 - one-approval first-run setup
 
 - A fresh owner can start with `/tingle`; one approval uses the current DM, Hermes's effective profile timezone and standard Tingle times. It covers the default policy, proposed Gmail/Calendar/chat checks and grants, and both scheduled jobs. The separate private-chat suggestion filter remains off.

@@ -37,6 +37,9 @@ def test_fresh_setup_docs_use_one_approval_and_plain_defaults():
         assert "separate two-job consent" not in text
         assert "Source opt-ins and windows require separate permission" not in text
         assert "keep-all-off opt-out" not in text
+        assert "private-chat suggestions" in text and "separate consent" in text
+        assert "30-day Gmail review" in text
+        assert "/tingle lookback review LB-ID" in text and "/tingle lookback start 30" in text
     for relative in ("README.md", "docs/installation.md", "docs/beta-setup.md",
                      "docs/onboarding.md"):
         assert "/tingle source enable" in (root / relative).read_text(encoding="utf-8")

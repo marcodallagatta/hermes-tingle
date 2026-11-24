@@ -24,7 +24,8 @@ def test_guided_setup_leaves_private_chat_filter_off(guided):
     out = preview(guided)
     staged = json.loads((data / 'setup-state.json').read_text())['policy']
     assert 'private_chat_evaluation' not in staged
-    assert 'AI filter for private chat suggestions stays off' in out
+    assert 'optional extra AI pass for private-chat suggestions is OFF' in out
+    assert 'separate consent' in out and 'configured AI model' in out
     assert 'no monthly Tingle spending cap' not in out
     assert not (home / 'hermes-tingle.json').exists()
 

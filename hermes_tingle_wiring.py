@@ -6,9 +6,9 @@ At plugin load ``integrate`` registers the ``post_gateway_admission`` hook.
 The chat collector reads only after ``wire_chat_history`` connects the
 retained-session store and source consent exists. Nothing runs at import.
 
-REAL COVERAGE, labeled honestly: Hermes' public session API resolves only
-the MOST RECENT LIVE session for a chat (ended sessions are not enumerable
-through the public plugin API); the reader covers only that session's
+REAL COVERAGE, labeled honestly: the public gateway-session listing resolves the
+newest LIVE session per routing key (platform/chat/thread); ended sessions are
+not enumerable through this interface. The reader covers only that session's
 CURRENT segment - ancestor lineage expansion materializes every lineage row
 before limiting in the pinned implementation, so it is never used - and
 compaction-archived rows are excluded. The collector's review carries a
@@ -34,22 +34,44 @@ CHAT_COVERAGE_NOTE = sources.CHAT_COVERAGE_NOTE
 def wire_chat_history(state_db: Any | None) -> None:
     """Connect Hermes' retained session store as the chat history source.
 
-    ``state_db`` must expose ``find_session_by_origin(platform=, chat_id=)``
-    and ``get_messages(session_id, limit=, latest=, include_ancestors=)`` -
-    the pinned Hermes public state interface. Reads Hermes' OWN retained
-    history only, never a live messaging account. None unwires."""
+    The pinned public ``SessionDB`` surface provides
+    ``list_gateway_sessions(platform=, active_only=)`` and ``get_messages``.
+    Reads Hermes' OWN retained history only, never a live messaging account.
+    """
     if state_db is None:
         sources.set_chat_history_interfaces(None, None)
         return
+    list_sessions = getattr(state_db, "list_gateway_sessions", None)
     find = getattr(state_db, "find_session_by_origin", None)
     get_messages = getattr(state_db, "get_messages", None)
-    if not callable(find) or not callable(get_messages):
+    if not callable(get_messages) or (not callable(list_sessions) and not callable(find)):
         raise ValueError(
-            "state_db must expose find_session_by_origin and get_messages")
+            "state_db must expose list_gateway_sessions and get_messages")
 
     def session_resolver(platform: str, chat_id: str):
+        if callable(list_sessions):
+            rows = list_sessions(platform=platform, active_only=True)
+            if not isinstance(rows, (list, tuple)):
+                return []
+            wanted_platform = str(platform or "").casefold()
+            wanted_chat = str(chat_id or "")
+            result = []
+            seen = set()
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                session_id = row.get("id")
+                if (not isinstance(session_id, str) or not session_id or session_id in seen
+                        or str(row.get("source") or "").casefold() != wanted_platform
+                        or str(row.get("chat_id") or "") != wanted_chat):
+                    continue
+                seen.add(session_id)
+                result.append(session_id)
+            return result
+        if not callable(find):
+            return []
         session_id = find(platform=platform, chat_id=chat_id)
-        return [session_id] if session_id else []
+        return [session_id] if isinstance(session_id, str) and session_id else []
 
     def message_reader(session_id: str):
         # cap+1: lets the collector DETECT a truncated window and disclose it.

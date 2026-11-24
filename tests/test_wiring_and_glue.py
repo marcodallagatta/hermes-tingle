@@ -47,12 +47,16 @@ def isolated_store(tmp_path, monkeypatch):
 
 class _FakeStateDB:
     def __init__(self):
-        self.find_calls = []
+        self.list_calls = []
         self.get_calls = []
 
-    def find_session_by_origin(self, *, platform, chat_id, thread_id=None, user_id=None):
-        self.find_calls.append((platform, chat_id))
-        return "sess-1" if chat_id == "1001" else None
+    def list_gateway_sessions(self, *, platform=None, active_only=True):
+        self.list_calls.append((platform, active_only))
+        return [
+            {"id": "sess-1", "source": "telegram", "chat_id": "1001", "thread_id": ""},
+            {"id": "sess-2", "source": "Telegram", "chat_id": "1001", "thread_id": "topic-2"},
+            {"id": "other-chat", "source": "telegram", "chat_id": "2002", "thread_id": ""},
+        ]
 
     def get_messages(self, session_id, limit=None, latest=False, **kwargs):
         self.get_calls.append({"session_id": session_id, "limit": limit,
@@ -129,6 +133,7 @@ class TestRegisterGlue:
         assert ctx.platform_handlers == {}
         assert ctx.hooks["post_gateway_admission"] is wiring.observe_admitted_inbound
         assert sources._chat_session_resolver is not None
+        assert "chat" in sources.source_capabilities()
 
     def test_reader_bounds_history_at_the_query(self):
         db = _FakeStateDB()
@@ -136,7 +141,7 @@ class TestRegisterGlue:
         resolver = sources._chat_session_resolver
         reader = sources._chat_message_reader
         sessions = resolver("telegram", "1001")
-        assert sessions == ["sess-1"]
+        assert sessions == ["sess-1", "sess-2"]
         rows = list(reader("sess-1"))
         # cap+1 at the source query: a truncated window is detectable, never
         # silently complete.
@@ -146,7 +151,18 @@ class TestRegisterGlue:
         # lineage row before applying the limit when it is True (unbounded).
         assert db.get_calls[0]["include_ancestors"] is False
         assert rows[0]["timestamp"] == 1763300000.0  # created_at mapped
-        assert db.find_calls == [("telegram", "1001")]
+        assert db.list_calls == [("telegram", True)]
+
+    def test_chat_capability_refusal_names_runtime_wiring(self, monkeypatch):
+        sources.set_chat_history_interfaces(None, None)
+        monkeypatch.setattr(sources, "source_capabilities", lambda: {"email", "calendar"})
+
+        with pytest.raises(sources.SourceReadError) as exc:
+            sources.probe_source("chat")
+
+        assert "Chat history isn't wired into this Hermes runtime" in str(exc.value)
+        assert "retry `/tingle source enable chat`" in str(exc.value)
+        assert "sign-in issue" in str(exc.value)
 
     def test_chat_review_carries_exact_partial_coverage_note(self):
         store.enable_source("chat", enabled_by="synthetic fixture consent")
@@ -258,7 +274,7 @@ def test_plugin_registers_history_and_admission_without_a_platform_factory(isola
         plugin.register(ctx)
     assert any(t["name"] == "hermes_tingle" for t in ctx.tools)
     assert any(name == "tingle" for name, _ in ctx.commands)
-    assert sources._chat_session_resolver("telegram", "1001") == ["sess-1"]
+    assert sources._chat_session_resolver("telegram", "1001") == ["sess-1", "sess-2"]
     assert not ctx.platform_handlers
     hook = ctx.hooks["post_gateway_admission"]
     assert hook(session_key="s1", platform="telegram", source=_dm_source(),

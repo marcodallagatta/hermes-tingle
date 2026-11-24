@@ -24,6 +24,45 @@ def _yes(ctx, llm=None):
     return ctx
 
 
+def test_setup_offer_runs_one_bounded_private_review_and_suppresses_duplicate_import(env, monkeypatch):
+    import hermes_tingle_lookback as lb
+
+    sender, ctx = env[0], env[1]
+    questions = []
+    ctx.ask_choice = lambda question, choices: questions.append((question, choices)) or "assess"
+    calls = []
+    monkeypatch.setattr(lb, "_run_scan", lambda context, source, expected, days, *, grant_assess:
+                        calls.append((days, grant_assess)) or "LB-ABCDEF12")
+    monkeypatch.setattr(lb, "review_after_scan", lambda context, source, expected, scan_id:
+                        calls.append(("review", scan_id)) or "✅ Review done: 1 tracked, 0 skipped.")
+
+    out = onboarding.offer_after_setup(ctx, sender)
+
+    assert len(questions) == 1
+    question, choices = questions[0]
+    assert "last 30 days" in question
+    assert "short excerpts to your configured Hermes model" in question and "possibly cloud/billed" in question
+    assert "private DM staging for 7 days" in question
+    assert "Nothing is auto-added" in question
+    assert [choice["value"] for choice in choices] == ["assess", "scan", "later"]
+    assert calls == [(30, True), ("review", "LB-ABCDEF12")]
+    assert "Sit back and relax" in out and "automatically" in out
+    assert onboarding.due() is False
+
+
+def test_setup_lookback_no_or_timeout_does_not_read_and_points_to_manual_start(env, monkeypatch):
+    import hermes_tingle_lookback as lb
+
+    sender, ctx = env[0], env[1]
+    monkeypatch.setattr(lb, "_run_scan", lambda *a, **k: pytest.fail("no scan before a choice"))
+    for answer in ("later", None):
+        ctx.ask_choice = lambda question, choices, answer=answer: answer
+        out = onboarding.offer_after_setup(ctx, sender)
+        assert "`/tingle lookback start 30`" in out
+        assert "Sit back and relax" in out
+        assert onboarding.due() is False
+
+
 def test_prompt_only_for_owner_dm_with_empty_profile(env):
     sender, ctx = env[0], env[1]
     # non-owner, group and bot senders never see the question and record nothing

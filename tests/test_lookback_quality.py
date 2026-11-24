@@ -91,8 +91,10 @@ def test_scan_only_makes_no_model_call_and_ranks_nothing(env):
 def test_start_choice_with_model_runs_once_through_facade_without_overrides(env):
     llm = FakeLlm(); env[1].llm = llm
     seen = []
+    prompts = []
     def ask(q, ch):
         seen.append([c['value'] for c in ch])
+        prompts.append(q)
         return 'assess' if 'assess' in [c['value'] for c in ch] else 'accept'
     env[1].ask_choice = ask
     out = plugin.handle_command(env[1], 'lookback start 7', source=env[0])
@@ -100,10 +102,12 @@ def test_start_choice_with_model_runs_once_through_facade_without_overrides(env)
     assert seen[0] == ['assess', 'scan', 'cancel']
     assert len(llm.calls) == 1 and set(llm.calls[0]) == ALLOWED_KEYS
     assert llm.calls[0]['purpose'] == assess.PURPOSE and llm.calls[0]['schema_name'] == assess.SCHEMA_NAME
-    assert 'Review the revised contract' in out and ASK not in out and f'`/tingle lookback review {scan}' in out
+    assert '🔎 Lead 1 of 1' in prompts[-1]
+    assert f"resume with `/tingle lookback review {scan}`" in prompts[-1]
+    assert f'`/tingle lookback review {scan}`' in out
     detail = plugin.handle_command(env[1], f'lookback results {scan}', source=env[0])
     assert 'Ask: Review the revised contract' in detail and ASK in detail
-    assert 'Nothing added' in out and not store.list_items()
+    assert not store.list_items()
     conn = lb.connect(); row = conn.execute('SELECT * FROM scans').fetchone(); conn.close()
     assert row['assess_grant'] == '' and row['assess_runs'] == 1  # One consent, one run.
 
