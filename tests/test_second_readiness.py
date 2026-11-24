@@ -469,8 +469,9 @@ def plugin_db(_):
 from pathlib import Path
 def get_hermes_home(): return Path(os.environ['HERMES_HOME'])
 ''')
-    (runtime/'sitecustomize.py').write_text('''import socket,subprocess
+    (runtime/'sitecustomize.py').write_text('''import socket,subprocess,sys
 def forbidden(*a,**k): raise AssertionError('synthetic helper: external access forbidden')
+sys.modules['persistence_assembly'] = None
 socket.socket.connect=forbidden
 socket.socket.connect_ex=forbidden
 subprocess.Popen=forbidden

@@ -261,6 +261,7 @@ def test_snapshot_main_real_wiring_stages_and_sanitizes(discovery_env, tmp_path,
     module = types.ModuleType('hermes_state')
     module.DEFAULT_DB_PATH = str(tmp_path / 'state.db')
     module.SessionDB = lambda path, read_only=False: _StateDB()
+    monkeypatch.setitem(sys.modules, 'persistence_assembly', None)
     monkeypatch.setitem(sys.modules, 'hermes_state', module)
     assert source_snapshot.main() == 0
     out = capsys.readouterr().out
@@ -372,6 +373,7 @@ def test_helper_private_exception_text_never_leaks_to_output_or_diagnostics(
     module = types.ModuleType('hermes_state')
     module.DEFAULT_DB_PATH = 'synthetic-state.db'
     module.SessionDB = lambda path, read_only=False: _SyntheticStateDB()
+    monkeypatch.setitem(sys.modules, 'persistence_assembly', None)
     monkeypatch.setitem(sys.modules, 'hermes_state', module)
     original_stage = discovery.stage_local_candidates
 
