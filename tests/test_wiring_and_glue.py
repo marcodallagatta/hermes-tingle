@@ -192,6 +192,44 @@ def test_nested_persistence_import_failure_does_not_use_legacy_adapter(monkeypat
     assert legacy_calls == []
 
 
+def test_unavailable_legacy_host_api_disables_only_chat_history(monkeypatch, caplog):
+    sources.set_chat_history_interfaces(None, None)
+    original_import = builtins.__import__
+
+    def fail_legacy_host_helper(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "persistence_assembly":
+            raise ModuleNotFoundError("No module named 'persistence_assembly'", name="persistence_assembly")
+        if name == "hermes_state":
+            raise ImportError(
+                "cannot import name 'mkdir_under_hermes_home' from 'hermes_constants' (unknown location)",
+                name="hermes_constants",
+            )
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fail_legacy_host_helper)
+    with caplog.at_level("WARNING", logger=wiring.__name__):
+        report = wiring.wire_from_runtime()
+
+    assert report == {"chat_history": False}
+    assert "chat" not in sources.source_capabilities()
+    assert "legacy chat-history adapter unavailable" in caplog.text
+
+
+def test_unexpected_legacy_import_failure_is_surfaced(monkeypatch):
+    original_import = builtins.__import__
+
+    def fail_unexpected_legacy_dependency(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "persistence_assembly":
+            raise ModuleNotFoundError("No module named 'persistence_assembly'", name="persistence_assembly")
+        if name == "hermes_state":
+            raise ImportError("synthetic database dependency failure", name="sqlite3")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fail_unexpected_legacy_dependency)
+    with pytest.raises(RuntimeError, match="adapter could not be imported"):
+        wiring.wire_from_runtime()
+
+
 def test_persistence_reader_clamps_oversized_limit_before_query(monkeypatch, tmp_path):
     calls = {}
     _install_fake_persistence_reader(monkeypatch, tmp_path, calls)

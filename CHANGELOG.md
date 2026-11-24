@@ -2,9 +2,9 @@
 
 ## 0.9.19 - reliable retained chat-history wiring
 
-- Newer Hermes runtimes read retained chat history through the read-only persistence reader and apply message limits in the repository query. Older supported runtimes keep the legacy `SessionDB` adapter only when the persistence-reader module is absent.
-- A malformed persistence interface or a real reader failure is surfaced as an incomplete chat review rather than silently disabling history. Gmail batch transport, source scope, and data retention are unchanged.
-- Local verification on this candidate: standalone suite **2,745 passed, 31 skipped, 243 warnings**; required Hermes-runtime suite **2,779 passed, 5 skipped, 244 warnings**; privacy gate passed. Disposable plugin validation passed, with Catalog rule 9 private-core-import warnings still present. No cloud CI or live-profile validation was run.
+- Newer Hermes runtimes read retained chat history through the read-only persistence reader and apply message limits in the repository query. Older runtimes use the legacy `SessionDB` adapter only when the persistence-reader module is absent and the adapter is host-loadable. If an older plugin runtime cannot load that facade, chat history remains unavailable while the rest of Tingle registers; the collector reports `no_history_interface`.
+- A malformed available persistence interface or a real reader failure is surfaced as an incomplete chat review rather than silently disabling history. Gmail batch transport, source scope, and data retention are unchanged.
+- Local verification: standalone suite **2,747 passed, 31 skipped, 243 warnings**; required Hermes-runtime suite at core `caafe5389ae585ef77387a962aee05b1bcf17029`: **2,781 passed, 5 skipped, 244 warnings**; privacy gate passed; the disposable official plugin-admission runner passed with known Catalog rule 9 private-core-import warnings. Live-profile behavior was not tested.
 
 ## 0.9.18 - connected setup and private look-back
 

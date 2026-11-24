@@ -30,6 +30,7 @@ the review incomplete when that cap is reached; it fetches no sentinel row.
 from __future__ import annotations
 
 import itertools
+import logging
 from pathlib import Path
 from typing import Any, Callable, ContextManager, cast
 
@@ -39,6 +40,7 @@ except ImportError:  # pragma: no cover - top-level pytest import
     import hermes_tingle_sources as sources
 
 CHAT_COVERAGE_NOTE = sources.CHAT_COVERAGE_NOTE
+_LOGGER = logging.getLogger(__name__)
 
 def wire_chat_history(state_db: Any | None) -> None:
     """Connect Hermes' retained session store as the chat history source.
@@ -183,9 +185,10 @@ def wire_from_runtime(ctx: Any = None) -> dict[str, bool]:
     """Wire what the pinned Hermes runtime makes available to a plugin.
 
     Newer Hermes runtimes use the read-only persistence reader. Older supported
-    runtimes fall back to their public ``hermes_state.SessionDB`` surface.
-    Outside a real runtime, the collector reports no_history_interface. Once a
-    runtime interface exists, wiring or read failures are surfaced, not hidden.
+    runtimes try their public ``hermes_state.SessionDB`` surface. If that legacy
+    facade is unavailable in the plugin runtime, chat history stays unwired and
+    the source capability reports that clearly; failures from an available
+    reader or a malformed adapter are surfaced, not hidden.
 
     Source discovery: the admitted-inbound hook is registered by integrate().
     """
@@ -199,6 +202,13 @@ def wire_from_runtime(ctx: Any = None) -> dict[str, bool]:
             import hermes_state
         except ModuleNotFoundError as legacy_exc:
             if legacy_exc.name == "hermes_state":
+                return {"chat_history": False}
+            raise RuntimeError("Hermes retained chat history adapter could not be imported") from None
+        except ImportError as legacy_exc:
+            if (getattr(legacy_exc, "name", None) == "hermes_constants"
+                    and "mkdir_under_hermes_home" in str(legacy_exc)):
+                _LOGGER.warning(
+                    "legacy chat-history adapter unavailable in this Hermes plugin runtime; chat history disabled")
                 return {"chat_history": False}
             raise RuntimeError("Hermes retained chat history adapter could not be imported") from None
         db_path = getattr(hermes_state, "DEFAULT_DB_PATH", None)
