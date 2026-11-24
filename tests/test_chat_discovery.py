@@ -39,7 +39,7 @@ def message(text, *, role='user', now=None):
 def wire(messages):
     reads = []
     sources.set_chat_history_interfaces(lambda p, c: ['session-synthetic'],
-        lambda s: reads.append(s) or iter(messages))
+        lambda s, limit=None: reads.append(s) or iter(messages))
     return reads
 
 
@@ -108,7 +108,7 @@ def test_discovery_only_read_saturation_does_not_wake_shared_model(discovery_env
     store.disable_source('calendar')
     now = store._now()
     seen = []
-    def reader(session):
+    def reader(session, limit=None):
         for i in range(sources.MAX_CHAT_READS_PER_CHAT + 5):
             seen.append(i)
             yield message('I will arrange a synthetic meeting ' + chr(97 + i % 26), now=now)
@@ -143,7 +143,7 @@ def test_discovery_candidates_selected_after_update_budget_reservation(discovery
             platform='telegram', user_id='42', chat_id=chat, chat_type='dm', is_bot=False))
     monkeypatch.setattr(store, 'chats_in_scope', lambda: ['telegram:42', 'telegram:43'])
     now = store._now()
-    def reader(session):
+    def reader(session, limit=None):
         if session == 's42':
             return ([message('I will arrange meeting option ' + chr(97 + i), now=now) for i in range(5)] +
                     [message('passport update ' + str(i), now=now) for i in range(50)])
@@ -205,7 +205,7 @@ def test_discovery_receipt_binds_permission_captured_before_history_read(discove
     now = store._now()
     original_generation = store.source_generation('chat')
     seen = []
-    def reader(session):
+    def reader(session, limit=None):
         seen.append(session)
         yield message('I will send the signed form next week', now=now)
         store.enable_source('chat', enabled_by='synthetic mid-read regrant')
@@ -327,7 +327,7 @@ def test_group_scan_with_active_title_match_reads_owner_dm_but_hides_discovery(d
     def resolver(platform, chat_id):
         reads.append(chat_id)
         return ['session-' + chat_id]
-    def reader(session_id):
+    def reader(session_id, limit=None):
         text = ('I will send the signed form next week' if session_id == 'session-42'
                 else 'passport submitted')
         return [message(text)]
@@ -594,7 +594,7 @@ def test_discovery_template_is_not_model_tool_or_prompt_input():
 
 def test_discovery_reads_never_exceed_existing_two_hundred_budget(discovery_env):
     seen = []
-    def reader(session):
+    def reader(session, limit=None):
         for i in range(300):
             seen.append(i)
             yield message('a synthetic unrelated message ' + str(i))
@@ -615,7 +615,7 @@ def test_exact_two_hundred_row_cap_with_active_item_is_shared_incomplete(discove
     now = store._now()
     seen = []
 
-    def reader(session):
+    def reader(session, limit=None):
         for index in range(sources.MAX_CHAT_READS_PER_CHAT):
             seen.append(index)
             yield message('synthetic unrelated retained row ' + str(index), now=now)
@@ -723,7 +723,7 @@ def test_mixed_owner_dm_and_group_reads_only_serialized_owner_principal(discover
     def resolver(platform, chat_id):
         resolved.append(chat_id)
         return ['session-' + chat_id]
-    def reader(session_id):
+    def reader(session_id, limit=None):
         text = ('I will send the signed form next week' if session_id == 'session-42'
                 else 'I will send a private group detail next week')
         return [message(text)]
@@ -746,7 +746,7 @@ def test_discovery_enabled_scan_preserves_group_title_update(discovery_env):
     def resolver(platform, chat_id):
         resolved.append(chat_id)
         return ['session-' + chat_id]
-    def reader(session_id):
+    def reader(session_id, limit=None):
         return {'session-42': [message('I will send the signed form next week')],
                 'session--1009': [message('passport submitted'),
                                   message('I will deliver a group package next week')],
@@ -979,14 +979,14 @@ def test_staged_discovery_does_not_starve_later_bounded_leads(discovery_env):
 @pytest.mark.parametrize('session_id,content', [(None, 'I will arrange a synthetic meeting'),
     ('', 'I will arrange a synthetic meeting'), ('synthetic', {'text':'I will arrange a synthetic meeting'})])
 def test_discovery_requires_verified_locator_fields(discovery_env, session_id, content):
-    sources.set_chat_history_interfaces(lambda *a: [session_id], lambda *a: [message(content)])
+    sources.set_chat_history_interfaces(lambda *a: [session_id], lambda *a, limit=None: [message(content)])
     result = sources._collect_chat_matches(now=store._now(), discovery_enabled=True)
     assert result['discovery']['matches'] == []
 
 
 def test_discovery_uses_at_most_five_sessions_per_chat(discovery_env):
     calls = []
-    def reader(session):
+    def reader(session, limit=None):
         calls.append(session)
         return [message('I will arrange a synthetic meeting')]
     sources.set_chat_history_interfaces(lambda *a: [f'session-{i}' for i in range(9)], reader)
@@ -1004,7 +1004,7 @@ def test_update_priority_retains_global_hundred_budget(discovery_env):
         store.note_known_chat('telegram:' + chat, origin='inbound')
         observe_source(SimpleNamespace(**(vars(discovery_env) | {'chat_id': chat})))
     now = store._now()
-    def reader(session):
+    def reader(session, limit=None):
         return [message('I will arrange a synthetic meeting', now=now)] + [
             message('passport update ' + str(i), now=now) for i in range(50)]
     calls = []
@@ -1145,7 +1145,7 @@ def test_owner_replaced_during_collection_does_not_bind_stale_message(discovery_
     policy = hermes_constants.get_hermes_home() / 'hermes-tingle.json'
     now = store._now()
 
-    def reader(session):
+    def reader(session, limit=None):
         yield message('I will send the signed form once the client replies.', now=now)
         data = json.loads(policy.read_text())
         data['owner_principals'] = ['telegram:99']
@@ -1165,7 +1165,7 @@ def test_policy_replaced_during_collection_does_not_bind_stale_message(discovery
     policy = hermes_constants.get_hermes_home() / 'hermes-tingle.json'
     now = store._now()
 
-    def reader(session):
+    def reader(session, limit=None):
         yield message('I will redeem the voucher code this week.', now=now)
         data = json.loads(policy.read_text())
         data['ticket_exclude_patterns'] = [r'Voucher']
@@ -1198,7 +1198,7 @@ def test_discovery_only_resolver_failure_stays_out_of_shared_errors(discovery_en
     def resolver(platform, chat_id):
         raise RuntimeError('synthetic private resolver failure')
 
-    sources.set_chat_history_interfaces(resolver, lambda s: iter([]))
+    sources.set_chat_history_interfaces(resolver, lambda s, limit=None: iter([]))
     snapshot = sources.collect_snapshot(discovery_enabled=True)
     assert snapshot['errors'] == []
     assert 'read_error' not in snapshot['chat_review']['incomplete_reasons']
@@ -1211,7 +1211,7 @@ def test_discovery_only_reader_failure_stays_out_of_shared_errors(discovery_env)
     store.disable_source('email')
     store.disable_source('calendar')
 
-    def reader(session):
+    def reader(session, limit=None):
         raise RuntimeError('synthetic private reader failure')
 
     sources.set_chat_history_interfaces(lambda p, c: ['synthetic'], reader)
@@ -1227,6 +1227,6 @@ def test_update_lane_resolver_failure_still_surfaces(discovery_env):
     def resolver(platform, chat_id):
         raise RuntimeError('synthetic resolver failure')
 
-    sources.set_chat_history_interfaces(resolver, lambda s: iter([]))
+    sources.set_chat_history_interfaces(resolver, lambda s, limit=None: iter([]))
     result = sources._collect_chat_matches(now=store._now(), discovery_enabled=True)
     assert 'read_error' in result['incomplete_reasons']

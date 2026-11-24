@@ -56,13 +56,111 @@ def env(tmp_path, synthetic_settings, monkeypatch):
     class Ctx:
         def __init__(self):
             self.messages = []
+            self.questions = []
+            self.answers = []
         def post_message(self, text):
             self.messages.append(text)
         def ask_choice(self,q,choices):
-            assert 'Nothing is auto-added' in q or 'SHARED' in q
+            self.questions.append((q, choices))
+            assert 'Nothing is auto-added' in q or 'Nothing is added without a final confirmation' in q or 'SHARED' in q
+            if self.answers:
+                return self.answers.pop(0)
             values=[c['value'] for c in choices]
-            return 'scan' if 'scan' in values else choices[0]['value']
+            if 'scan' in values:
+                return 'scan'
+            if 'stop' in values:
+                return 'stop'
+            return choices[0]['value']
     return sender,Ctx(),calls,data,stamp
+
+
+def test_scan_start_prompt_is_short_and_moves_directly_into_private_review(env, monkeypatch):
+    sender, ctx = env[0], env[1]
+    calls = []
+    monkeypatch.setattr(lb, "_run_scan", lambda context, source, expected, days, *, grant_assess:
+                        calls.append((days, grant_assess)) or "LB-ABCDEF12")
+    monkeypatch.setattr(lb, "review", lambda context, source, scan_id:
+                        calls.append(("review", scan_id)) or "Review paused; resume command present.")
+    monkeypatch.setattr(lb, "_results_reply", lambda *a, **k: "Scan summary only.")
+
+    out = lb.scan(ctx, sender, 30)
+
+    question, choices = ctx.questions[0]
+    assert len(question) < 650
+    assert "bounded scan, not full mailbox coverage" in question.casefold()
+    assert "text stays in private DM staging for 7 days" in question
+    assert "possibly cloud/billed" in question
+    assert "Scan only sends nothing to a model" in question
+    assert "Nothing is auto-added" in question
+    assert "`/tingle lookback help`" in question
+    assert [choice["value"] for choice in choices] == ["assess", "scan", "cancel"]
+    assert calls == [(30, False), ("review", "LB-ABCDEF12")]
+    assert out == "Review paused; resume command present."
+
+
+def test_review_decision_timeout_is_resumable_with_the_exact_command(env):
+    import re
+
+    sender, ctx = env[0], env[1]
+    ctx.answers = ["scan", None]
+    paused = plugin.handle_command(ctx, "lookback start 7", source=sender)
+    match = re.search(r"LB-[0-9A-F]{8}", paused)
+    assert match, paused
+    scan_id = match.group(0)
+
+    assert "Review paused" in paused
+    assert f"`/tingle lookback review {scan_id}`" in paused
+    assert "nothing is added" in ctx.questions[-1][0].lower()
+    assert f"If this decision times out, resume with `/tingle lookback review {scan_id}`" in ctx.questions[-1][0]
+    assert not store.list_items()
+
+    # Exercise the exact advertised command after the decision timed out.
+    ctx.answers = ["skip"]
+    resumed = plugin.handle_command(ctx, f"lookback review {scan_id}", source=sender)
+    assert "Review done: 0 tracked, 1 skipped" in resumed
+    assert f"Finish with `/tingle lookback discard {scan_id}`" in resumed
+    assert "Sit back and relax; Tingle will send follow-ups automatically when needed." in resumed
+    assert not store.list_items()
+
+
+def test_scan_with_no_leads_completes_and_reassures_once(env, monkeypatch):
+    sender, ctx = env[0], env[1]
+    ctx.answers = ["scan"]
+    original = sources._gws_bridge
+
+    def empty_inbox(*args):
+        if args[3] == "list":
+            return {"messages": []}
+        return original(*args)
+
+    monkeypatch.setattr(sources, "_gws_bridge", empty_inbox)
+    out = plugin.handle_command(ctx, "lookback start 7", source=sender)
+
+    assert "No possible follow-ups in the checked messages" in out
+    assert out.count("Sit back and relax; Tingle will send follow-ups automatically when needed.") == 1
+    assert not store.list_items()
+
+
+def test_scan_reviews_leads_immediately_and_reassures_when_complete(env):
+    sender, ctx = env[0], env[1]
+    ctx.answers = ["scan", "skip"]
+
+    out = plugin.handle_command(ctx, "lookback start 7", source=sender)
+
+    assert "Review done: 0 tracked, 1 skipped" in out
+    assert out.count("Sit back and relax; Tingle will send follow-ups automatically when needed.") == 1
+    assert not store.list_items()
+
+
+def test_chat_enable_command_reports_unwired_and_leaves_chat_off(env, monkeypatch):
+    sender, ctx = env[0], env[1]
+    monkeypatch.setattr(sources, "source_capabilities", lambda: {"email", "calendar"})
+
+    out = plugin.handle_command(ctx, "source enable chat", source=sender)
+
+    assert "Chat history isn't wired into this Hermes runtime" in out
+    assert "no grant changed" in out
+    assert not any(row["kind"] == "chat" and row["enabled"] for row in store.list_source_optins())
 
 
 def test_scan_posts_progress_message(env):
@@ -613,7 +711,7 @@ def test_preview_discloses_body_storage_and_cleanup(env):
     previews=[]
     env[1].ask_choice=lambda prompt,choices: previews.append(prompt) or 'cancel'
     plugin.handle_command(env[1],'lookback start 7',source=env[0])
-    assert 'body text is STORED' in previews[0] and '7 days' in previews[0]
+    assert 'text stays in private DM staging' in previews[0] and '7 days' in previews[0]
     assert 'physical cleanup happens on the next look-back operation' not in previews[0]
     assert 'inline MIME' not in previews[0] and 'No attachment-download endpoint' not in previews[0]
     help_text=plugin.handle_command(env[1],'lookback help',source=env[0])
@@ -627,12 +725,12 @@ def test_preview_is_short_with_consent_essentials(env):
     plugin.handle_command(env[1],'lookback start 30',source=env[0])
     preview=previews[0]
     assert len(preview) < 1400  # Fits one control prompt with its choice labels; model details live in help.
-    assert 'Scan + model picks' in preview and 'cannot cap or see the cost' in preview
-    for phrase in ('last 30 days', 'bounded scan', 'not full mailbox coverage',
-                   'Nothing is auto-added', 'visible to everyone on this profile',
-                   'No standing source settings change', 'visible only to you in this DM',
-                   'Full disclosure: /tingle lookback help', 'cloud and billed',
-                   'Host retries may add requests', 'history/backups', '45 days',
+    assert 'short excerpts to your configured Hermes model' in preview and "can't cap or see the cost" in preview
+    for phrase in ('last 30 days', 'Bounded scan', 'not full mailbox coverage',
+                   'Nothing is auto-added', 'confirmed items are shared on this profile',
+                   'Ongoing source settings stay unchanged', 'visible only to you',
+                   'Full details: `/tingle lookback help`', 'possibly cloud/billed',
+                   'host retries may add requests', 'Provider/history/backups', '45 days',
                    'Scan only sends nothing to a model'):
         assert phrase in preview, phrase
     # Detailed numeric limits remain in the explicit disclosure, not the first screen.
@@ -649,20 +747,26 @@ def test_help_carries_full_disclosure_and_usage(env):
         assert phrase in text,phrase
 
 
-def test_scan_summary_leads_with_outcome_counters_behind_details(env):
+def test_scan_start_goes_straight_to_review_and_details_stay_available(env):
     text=plugin.handle_command(env[1],'lookback start 7',source=env[0])
-    assert text.startswith('🔎')
-    assert '1 possible follow-up in the checked messages' in text and 'nothing added' in text
+    assert text.startswith('⏸ Review paused:')
+    assert 'Track it, skip it, or stop here?' in env[1].questions[-1][0]
+    match = re.search(r'LB-[0-9A-F]{8}', text)
+    assert match, text
+    scan_id=match.group(0)
+    summary=lb._results_reply(env[0], lb.binding(env[0]), scan_id)
+    assert '1 possible follow-up in the checked messages' in summary and 'nothing added' in summary
     assert 'provider calls' not in text and 'listed IDs' not in text
-    scan_id=re.search(r'LB-[0-9A-F]{8}', text).group(0)
     details=plugin.handle_command(env[1],f'lookback list {scan_id} details',source=env[0])
     assert 'provider calls' in details and 'Listed 1' in details and 'date-checked 1' in details
 
 
 def test_scan_summary_suggested_commands_are_backticked(env):
     text=plugin.handle_command(env[1],'lookback start 7',source=env[0])
-    scan_id=re.search(r'LB-[0-9A-F]{8}', text).group(0)
-    assert f'`/tingle lookback review {scan_id}`' in text and '`/tingle lookback help`' in text
+    match = re.search(r'LB-[0-9A-F]{8}', text)
+    assert match, text
+    scan_id=match.group(0)
+    assert f'`/tingle lookback review {scan_id}`' in text and f'`/tingle lookback discard {scan_id}`' in text
     assert 'track-top' not in text and 'track-all' not in text
 
 

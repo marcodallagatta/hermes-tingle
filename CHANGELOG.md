@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.18 - connected setup and private look-back
+
+- Setup uses emoji-led bullets and explains that the optional private-chat suggestion filter is a separate AI pass, stays off by default, and needs separate consent.
+- When setup succeeds and the email bridge is available, it offers a one-off 30-day Gmail review. The owner chooses model picks, scan-only or later; lead review starts immediately, every tracked item retains its final confirmation, and timed-out review decisions can resume with the shown command. This one-off choice does not change the standing email grant or start an ongoing scan. If the bridge is unavailable, no review starts; setup gives the operator repair path.
+- Look-back consent copy is shorter while keeping the coverage, private-staging, model-cost/history, no-auto-add, standing-scope and expiry-metadata facts. The completed review tells the owner Tingle will follow up automatically.
+- Chat source wiring uses Hermes' public `list_gateway_sessions` and `get_messages` interfaces. Hermes lists active session records platform-wide, including stored prompt/config fields; Tingle uses only session ID/source/chat ID and does not persist or send other row fields. It fetches no messages from unrelated chats. The five-route/200-message caps bound transcript reads, not this listing; current segments only, with ended, earlier-lineage and archived history not covered. Each DB query receives the remaining per-chat budget before the read, and hitting the cap discloses incomplete coverage without overfetching a sentinel row. Readers without an explicit keyword `limit` are rejected; injected readers must enforce that limit before storage access, while the built-in adapter applies it in SQL.
+- Fresh setup skips the one-off review when the email bridge is missing, states that no review ran, and gives an operator repair path before the manual retry.
+- Onboarding guidance distinguishes the legacy empty-profile import offer on existing profiles from the separately confirmed private look-back after fresh setup.
+- Local verification: standalone **2,739 passed, 31 skipped, 243 warnings**; required Hermes runtime **2,773 passed, 5 skipped, 245 warnings** (the five runtime skips are the retired Drive-source tests). Privacy gate passed; plugin validation reports `ok: true`, `host_ready: true`, and the existing catalog rule-9 private-core-import warnings.
+
 ## 0.9.15 - one-approval first-run setup
 
 - A fresh owner can start with `/tingle`; one approval uses the current DM, Hermes's effective profile timezone and standard Tingle times. It covers the default policy, proposed Gmail/Calendar/chat checks and grants, and both scheduled jobs. The separate private-chat suggestion filter remains off.

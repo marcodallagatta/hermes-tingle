@@ -27,7 +27,7 @@ _RELATIVE_RE = re.compile(r"^(\d{1,3})(m|h|d|w)$", re.IGNORECASE)
 # child still serving old code must keep reporting its old version, so the
 # owner can see from chat whether a restart is still needed. Bump it together
 # with plugin.yaml on every meaningful batch (a test guards the match).
-VERSION = "0.9.15"
+VERSION = "0.9.18"
 
 
 def _json(payload: dict[str, Any]) -> str:

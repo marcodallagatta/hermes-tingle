@@ -1222,7 +1222,7 @@ def review(ctx, source, scan_id):
     finally:
         conn.close()
     if not ids:
-        return "✅ No pending leads in normal review. Nothing tracked. " + noise_note
+        return "✅ No pending leads. Nothing tracked. Sit back and relax; Tingle will send follow-ups automatically when needed. " + noise_note
     tracked = skipped = 0
     problems = []
     later = 0
@@ -1243,7 +1243,8 @@ def review(ctx, source, scan_id):
                 f"From {_sender_name(data)} · {_fmt_when(data.get('date'))}\n"
                 f"{_context_label(data.get('context_status'))}\n"
                 + (f"\n{snippet}\n" if snippet else "") +
-                "\nTrack it, skip it, or stop here? Nothing is added without a final confirmation.")
+                "\nTrack it, skip it, or stop here? Nothing is added without a final confirmation. "
+                f"If this decision times out, resume with `/tingle lookback review {scan_id}`.")
         pick = ctx.ask_choice(card, [{'value': 'track', 'label': 'Track it'}, {'value': 'skip', 'label': 'Skip'}, {'value': 'stop', 'label': 'Stop here'}])
         fence = connect()
         try:
@@ -1295,7 +1296,8 @@ def review(ctx, source, scan_id):
     note = (("\n\n⚠️ " + problems[0]) if problems else "") + ("\n" + noise_note if noise_note else "")
     parts = [f"{tracked} tracked", f"{skipped} skipped"]
     if remaining == 0:
-        return f"✅ Review done: {', '.join(parts)}. Finish with `/tingle lookback discard {scan_id}` to clear the scan." + note
+        return (f"✅ Review done: {', '.join(parts)}. Finish with `/tingle lookback discard {scan_id}` to clear the scan."
+                "\nSit back and relax; Tingle will send follow-ups automatically when needed." + note)
     return (f"⏸ Review paused: {', '.join(parts)}, {remaining} still waiting. "
             f"Pick up again with `/tingle lookback review {scan_id}`; finish with `/tingle lookback discard {scan_id}`." + note)
 
@@ -1346,29 +1348,31 @@ def _progress(ctx, text):
             pass
 
 
+def _start_disclosure(days):
+    return (
+        f"🔎 Review Gmail from the last {days} days once? Bounded scan, not full mailbox coverage.\n"
+        f"Reads headers, snippets and selected bodies; text stays in private DM staging for {RETENTION_DAYS} days or until discard, visible only to you. "
+        "Model picks send short excerpts to your configured Hermes model (possibly cloud/billed); Tingle can't cap or see the cost, "
+        "and host retries may add requests. Provider/history/backups may keep copies. Scan only sends nothing to a model. "
+        "Nothing is auto-added; confirmed items are shared on this profile. Ongoing source settings stay unchanged. "
+        "Unverified expiry metadata may stay 45 days.\n\n"
+        "Full details: `/tingle lookback help`"
+    )
+
+
 def scan(ctx, source, days):
     if not 1 <= days <= 30:
         raise ValueError("Choose 1-30 days")
     expected = binding(source)  # Before confirmation and any source-lock wait.
     if 'email' not in sources.source_capabilities():
         raise ValueError("Google Workspace bridge is not installed; no account read or grant created")
-    preview = (f"Review the last {days} days of Gmail once? This is a bounded scan, not full mailbox coverage. "
-               f"Reads headers, snippets and selected bodies; body text is STORED for {RETENTION_DAYS} days or until discard, "
-               "visible only to you in this DM staging. "
-               "Nothing is auto-added; items you approve become visible to everyone on this profile. "
-               "No standing source settings change.\n\n"
-               "Scan + model picks sends short excerpts to your configured Hermes model (possibly cloud and billed; "
-               "Tingle cannot cap or see the cost). Host retries may add requests. Model and gateway history/backups "
-               "may keep copies after discard. Scan only sends nothing to a model. Clear expiry claims can add an "
-               "unverified one-off the day before its claimed expiry when imported, with private timing metadata kept up to 45 days.\n\n"
-               "This can take a while. Full disclosure: /tingle lookback help")
-    pick = ctx.ask_choice(preview, [{'value': 'assess', 'label': 'Scan + model picks'},
-                                    {'value': 'scan', 'label': 'Scan only, no model'},
-                                    {'value': 'cancel', 'label': 'Cancel'}])
+    pick = ctx.ask_choice(_start_disclosure(days), [{'value': 'assess', 'label': 'Scan + model picks'},
+                                                       {'value': 'scan', 'label': 'Scan only, no model'},
+                                                       {'value': 'cancel', 'label': 'Cancel'}])
     if pick not in ('assess', 'scan'):
         return "Look-back cancelled - nothing was read and no grant was created."
     scan_id = _run_scan(ctx, source, expected, days, grant_assess=(pick == 'assess'))
-    return _results_reply(source, expected, scan_id)
+    return review_after_scan(ctx, source, expected, scan_id)
 
 
 def _results_reply(source, expected, scan_id):
@@ -1380,6 +1384,21 @@ def _results_reply(source, expected, scan_id):
         return text
     finally:
         conn.close()
+
+
+def review_after_scan(ctx, source, expected, scan_id):
+    """Show lead decisions immediately, but preserve scan failures and coverage warnings."""
+    summary = _results_reply(source, expected, scan_id)
+    result = review(ctx, source, scan_id)
+    if result.startswith("✅ No pending leads"):
+        if "⚠️" in summary or "failed" in summary.casefold() or "incomplete" in summary.casefold():
+            return summary
+        suffix = "Sit back and relax; Tingle will send follow-ups automatically when needed."
+        return summary + "\n" + suffix
+    markers = ("⚠️ scan", "coverage is incomplete", "partial context", "model request", "not assessed", "size limit")
+    warnings = [line for line in summary.splitlines()
+                if any(marker in line.casefold() for marker in markers)]
+    return ("\n".join(warnings) + "\n" if warnings else "") + result
 
 
 def _run_scan(ctx, source, expected, days, *, grant_assess):

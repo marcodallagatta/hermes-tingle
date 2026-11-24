@@ -85,10 +85,11 @@ def test_auto_owner_draft_survives_invalid_reply_and_restart(guided):  # noqa: F
 
 def test_auto_owner_setup_completes_policy_and_jobs(guided):  # noqa: F811
     home, data, source, ctx = _fresh(guided, TELEGRAM_HOME)
-    ctx.answer = 'start'
+    ctx.answers = ['start', 'later']
     activated = ctx.command('', source=source)
     assert 'is scheduled' in activated
-    assert len(ctx.questions) == 1
+    assert len(ctx.questions) == 2
+    assert 'last 30 days' in ctx.questions[1][0]
     assert len(ctx.jobs) == 2
     assert json.loads((home / 'hermes-tingle.json').read_text())['owner_principals'] == ['telegram:42']
 

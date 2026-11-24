@@ -37,6 +37,9 @@ def test_fresh_setup_docs_use_one_approval_and_plain_defaults():
         assert "separate two-job consent" not in text
         assert "Source opt-ins and windows require separate permission" not in text
         assert "keep-all-off opt-out" not in text
+        assert "private-chat suggestions" in text and "separate consent" in text
+        assert "30-day Gmail review" in text
+        assert "/tingle lookback review LB-ID" in text and "/tingle lookback start 30" in text
     for relative in ("README.md", "docs/installation.md", "docs/beta-setup.md",
                      "docs/onboarding.md"):
         assert "/tingle source enable" in (root / relative).read_text(encoding="utf-8")
@@ -48,6 +51,37 @@ def test_fresh_setup_docs_use_one_approval_and_plain_defaults():
     assert "one plain-language approval screen" in onboarding
     assert "does not send the user back through questions" in onboarding
     assert "profile's Hermes `timezone`" in onboarding
+    assert "On an existing configured profile with an empty tracker" in onboarding
+    assert "fresh setup instead offers the separately confirmed private 30-day Gmail look-back" in onboarding
+
+
+def test_chat_history_docs_match_multi_session_read_limits():
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    usage = (root / "skills/usage/SKILL.md").read_text(encoding="utf-8")
+    assert "Up to 5 active session routes per chat (including separate threads/topics)" in readme
+    assert "200 message reads per chat" in readme
+    assert "only the current segment of the most recent live session" not in readme
+    assert "up to five active session routes per chat" in usage
+    assert "200 message reads total per chat, current segments only" in usage
+    assert "ended sessions, earlier lineage segments and compaction-archived history are not covered" in usage.lower()
+    assert "Hitting a bound is disclosed as an incomplete review" in usage
+    disclosure = "active session records platform-wide"
+    assert disclosure in readme.lower()
+    assert disclosure in usage.lower()
+    for doc in (readme.lower(), usage.lower()):
+        assert "including stored prompt/config fields" in doc
+        assert "does not persist or send other row fields" in doc
+        assert "or fetch messages from unrelated chats" in doc
+    assert "does not change the standing email grant or start an ongoing scan" in usage
+
+
+def test_gmail_lookback_missing_bridge_fallback_is_documented():
+    root = Path(__file__).resolve().parents[1]
+    expected = ("If the email bridge is unavailable, Tingle says no review ran; ask your operator to wire it, "
+                "then run `/tingle lookback start 30`.")
+    for relative in ("README.md", "docs/onboarding.md", "docs/beta-setup.md"):
+        assert expected in (root / relative).read_text(encoding="utf-8")
 
 
 def test_existing_installation_prompt_refresh_is_documented():

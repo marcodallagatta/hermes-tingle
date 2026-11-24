@@ -376,14 +376,14 @@ def _approval_prompt(state):
     except ImportError:
         import hermes_tingle_sources as sources
     policy = state['policy']
-    return f"""Start Tingle with these defaults?
+    return f"""🧭 Start Tingle with these defaults?
 
-• Reminders go to this chat: `{policy['delivery']}`.
-• Follow-up reviews run at 00:00, 08:00 and 16:00 in `{policy['timezone']}`.
-• Due reminders are checked every {policy['deadline_poll_minutes']} minutes.
-• Date-only deadlines use {policy['date_only_time']}; today's calendar suggestions use {policy['availability_start']}–{policy['availability_end']}.
-• Reads Gmail for follow-ups, upcoming Google Calendar events (read-only; event context may include organizers and attendees), and chats already seen by this profile, including groups. Google Drive is not included.
-• The separate AI filter for private chat suggestions stays off.
+📍 Reminders go to this chat: `{policy['delivery']}`.
+🕰️ Follow-up reviews run at 00:00, 08:00 and 16:00 in `{policy['timezone']}`.
+⏰ Due reminders are checked every {policy['deadline_poll_minutes']} minutes.
+📅 Date-only deadlines use {policy['date_only_time']}; today's calendar suggestions use {policy['availability_start']}–{policy['availability_end']}.
+🔎 Reads Gmail for follow-ups, upcoming Google Calendar events (read-only; event context may include organizers and attendees), and chats already seen by this profile, including groups. Google Drive is not included.
+🤖 The optional extra AI pass for private-chat suggestions is OFF. It can send extra chat excerpts to your configured AI model (possibly cloud/billed), so it needs separate consent. This is separate from ordinary source reviews.
 
 {sources.source_privacy_notice()}
 
@@ -657,6 +657,13 @@ def handle(ctx, raw, source):
         result = setup_jobs._activate_jobs(
             ctx, authorize=authorize, first_run_sources=activation['sources'],
             first_run_create_jobs=activation.get('step') == 'approval')
+        if (activation.get('step') == 'approval'
+                and setup_jobs.JOB_SUCCESS_SENTENCE in result):
+            try:
+                from . import hermes_tingle_onboarding as onboarding
+            except ImportError:  # pragma: no cover - test harness import
+                import hermes_tingle_onboarding as onboarding
+            return result + "\n\n" + onboarding.offer_after_setup(ctx, source)
         return result if activation.get('step') == 'approval' else 'Validated policy saved. ' + result
     except OwnerRefused as exc:
         if state is None:

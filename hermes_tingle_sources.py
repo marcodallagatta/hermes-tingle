@@ -4,6 +4,7 @@ from __future__ import annotations
 import itertools
 import functools
 import hashlib
+import inspect
 from contextvars import ContextVar
 import json
 import re
@@ -877,26 +878,36 @@ def _stage_reconciliation_pages(lookback_days: int, *, now: datetime) -> None:
 #
 # Injected contracts:
 #   session_resolver(platform: str, chat_id: str) -> iterable of session ids
-#   message_reader(session_id: str) -> iterable of message dicts with
-#       "role" (str), "content" (str), "timestamp" (epoch seconds, float)
+#   message_reader(session_id: str, *, limit: int) -> iterable of message dicts
+#       with "role" (str), "content" (str), and "timestamp" (epoch seconds)
 _chat_session_resolver: Any = None
 _chat_message_reader: Any = None
 
 # Exact partial-coverage disclosure carried on every chat review: Hermes'
-# public session API resolves only the most recent LIVE session per chat,
-# the bounded reader covers only that session's CURRENT segment (ancestor
-# lineage expansion is an unbounded read in the pinned implementation and is
-# never used), and compaction-archived rows are excluded - so a chat review
-# never implies full history even when it completes within its bounds.
+# public session API lists live sessions by platform/chat/thread route. The
+# resolver can read up to MAX_CHAT_SESSIONS_PER_CHAT routes per chat, including
+# separate topics; the collector applies MAX_CHAT_READS_PER_CHAT across those
+# sessions and reads current segments only. Ended sessions, prior lineage and
+# compaction-archived rows are not covered, so a chat review never implies full history.
 CHAT_COVERAGE_NOTE = (
-    "current segment of the most recent live session per chat only; earlier "
-    "lineage segments, ended sessions, and compaction-archived history are "
-    "not covered (Hermes public API limits)")
+    f"up to {MAX_CHAT_SESSIONS_PER_CHAT} active session routes per chat (including separate threads/topics), "
+    "current segment only; "
+    f"up to {MAX_CHAT_READS_PER_CHAT} message reads per chat; "
+    "active session records (including stored prompt/config fields) are listed platform-wide; "
+    "only session IDs/platform/chat IDs are used and other row fields aren't persisted or sent; "
+    "no messages from other chats are fetched; "
+    "ended sessions, earlier lineage segments and compaction-archived history are not covered")
 
 
 def set_chat_history_interfaces(session_resolver: Any, message_reader: Any) -> None:
-    """Operator wiring: inject the Hermes session-history read interfaces.
-    Both must be callables; passing None for either unwires the collector."""
+    """Inject the Hermes session-history interfaces.
+
+    The message reader must explicitly accept a keyword ``limit`` and must
+    enforce it before touching storage. This setter can check the signature but
+    cannot prove an injected implementation honors that contract; the built-in
+    Hermes adapter applies the limit in SQL. Passing None for either interface
+    unwires the collector, and readers without an explicit limit are rejected.
+    """
     global _chat_session_resolver, _chat_message_reader
     if session_resolver is None or message_reader is None:
         _chat_session_resolver = None
@@ -904,8 +915,29 @@ def set_chat_history_interfaces(session_resolver: Any, message_reader: Any) -> N
         return
     if not callable(session_resolver) or not callable(message_reader):
         raise ValueError("chat history interfaces must be callable")
+    try:
+        parameters = inspect.signature(message_reader).parameters.values()
+        supports_limit = any(
+            parameter.name == "limit" and parameter.kind in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+            for parameter in parameters)
+    except (TypeError, ValueError):
+        supports_limit = False
+    if not supports_limit:
+        raise ValueError("chat message reader must accept a per-call limit")
+
+    def bounded_message_reader(session_id: str, limit: int = MAX_CHAT_READS_PER_CHAT):
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("chat message read limit must be a non-negative integer")
+        bounded_limit = min(limit, MAX_CHAT_READS_PER_CHAT)
+        if bounded_limit == 0:
+            return
+        rows: Any = message_reader(session_id, limit=bounded_limit)
+        iterable = rows if rows is not None else ()
+        yield from itertools.islice(iter(iterable), bounded_limit)
+
     _chat_session_resolver = session_resolver
-    _chat_message_reader = message_reader
+    _chat_message_reader = bounded_message_reader
 
 
 @store.serialized("sources")
@@ -1057,20 +1089,21 @@ def _collect_chat_matches(*, now: datetime, discovery_enabled: bool = False) -> 
         for session_id in sessions:
             if stop_chat or total >= MAX_CHAT_MESSAGES_TOTAL:
                 break
+            remaining_reads = MAX_CHAT_READS_PER_CHAT - reads
+            if remaining_reads <= 0:
+                mark_bounded()
+                stop_chat = True
+                break
             try:
-                message_iter = safe_message_iter(iter(_chat_message_reader(session_id)))
+                message_iter = safe_message_iter(
+                    iter(_chat_message_reader(session_id, limit=remaining_reads)))
             except Exception:
                 note_incomplete("read_error")
                 stop_chat = True
                 break
-            if discovery_enabled:
-                message_iter = itertools.islice(message_iter, MAX_CHAT_READS_PER_CHAT - reads)
+            message_iter = itertools.islice(message_iter, remaining_reads)
             for message in message_iter:
                 reads += 1
-                if reads > MAX_CHAT_READS_PER_CHAT:
-                    mark_bounded()
-                    stop_chat = True
-                    break
                 if not isinstance(message, dict):
                     continue
                 if str(message.get("role", "")).casefold() not in CHAT_ALLOWED_ROLES:
@@ -1127,7 +1160,7 @@ def _collect_chat_matches(*, now: datetime, discovery_enabled: bool = False) -> 
                 total += 1
                 review["scanned"] += 1
                 update_counts[chat_ref] = collected
-            if discovery_enabled and reads >= MAX_CHAT_READS_PER_CHAT:
+            if reads >= MAX_CHAT_READS_PER_CHAT:
                 mark_bounded()
                 stop_chat = True
             if stop_chat:
@@ -2596,6 +2629,11 @@ def probe_source(kind: str) -> str | None:
     Discards probe metadata; it does not import source content or claim full scopes.
     """
     if kind not in source_capabilities():
+        if kind == "chat":
+            raise SourceReadError(
+                "Chat history isn't wired into this Hermes runtime, so no grant changed. "
+                "Ask your operator to update the Tingle runtime, then retry `/tingle source enable chat`; "
+                "this isn't a chat-account sign-in issue.")
         raise SourceReadError("Source capability is not installed/wired in this profile; no grant changed.")
     try:
         if kind == "email":
@@ -2611,7 +2649,10 @@ def probe_source(kind: str) -> str | None:
 def source_privacy_notice() -> str:
     return ("Connection checks do not read email messages or event details. Google may refresh its saved sign-in on this profile; "
             "chat checks access without reading messages. Later source text and tracked details may be sent to your "
-            "configured AI provider and appear in Hermes history. Turning a source off stops future reads, but "
+            "configured AI provider and appear in Hermes history. Later chat reviews first list active session records "
+            "across this platform; these rows can include stored prompt/config fields. Tingle uses only session ID, "
+            "platform and chat ID to filter them, does not persist or send the other fields, and fetches no messages "
+            "from unrelated chats. Turning a source off stops future reads, but "
             "can't pull back content already sent or saved.")
 
 

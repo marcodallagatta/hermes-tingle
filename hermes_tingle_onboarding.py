@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover - exercised by the test harness
     import hermes_tingle_lookback as lookback
 
 DAYS = 30
+SETUP_LOOKBACK_OFFER_META = "setup_lookback_offer_v1"
 
 
 def _version() -> str:
@@ -69,14 +70,71 @@ def _stale_marker(state: dict[str, Any]) -> bool:
 
 
 def due() -> bool:
-    """Onboarding is due once: no valid answer recorded yet and a truly empty profile.
-
-    A marker left by a scan that never completed does not use up the offer.
-    """
+    """Onboarding is due once, unless fresh setup already offered the look-back."""
+    try:
+        if store.get_plugin_meta(SETUP_LOOKBACK_OFFER_META):
+            return False
+    except Exception:
+        return False
     state = store.onboarding_state()
     if state is not None and not _stale_marker(state):
         return False
     return store.profile_item_count() == 0
+
+
+def offer_after_setup(ctx: Any, source: Any) -> str:
+    """Offer a separate, bounded private Gmail review after fresh setup succeeds."""
+    ready = "All set. Sit back and relax; Tingle will send follow-ups automatically when needed."
+    retry = ready + " Start a one-off Gmail look-back later with `/tingle lookback start 30`."
+    try:
+        expected = lookback.binding(source)
+    except Exception:
+        return retry
+    try:
+        email_available = "email" in sources.source_capabilities()
+    except Exception:
+        email_available = False
+    if not email_available:
+        # This is not a usable consent choice without the Google bridge. Record
+        # the fresh-setup path as unavailable to avoid a duplicate legacy prompt.
+        try:
+            store.set_plugin_meta(SETUP_LOOKBACK_OFFER_META, "unavailable")
+        except Exception:
+            pass
+        return ("Setup is complete, but the one-off Gmail review isn't available: the Google Workspace email bridge "
+                "isn't wired into this Hermes runtime, so no review was started. Ask your operator to wire it; "
+                "once available, run `/tingle lookback start 30`. "
+                "Tingle will send follow-ups automatically when needed.")
+    try:
+        # Suppress the older empty-profile onboarding prompt on the next `/tingle`;
+        # this offer is the fresh-setup look-back path, with manual review instead.
+        store.set_plugin_meta(SETUP_LOOKBACK_OFFER_META, "offered")
+    except Exception:
+        return retry
+    choices = [
+        {"value": "assess", "label": "Review with model"},
+        {"value": "scan", "label": "Review without model"},
+        {"value": "later", "label": "Not now"},
+    ]
+    try:
+        pick = ctx.ask_choice(lookback._start_disclosure(DAYS), choices)
+    except Exception:
+        pick = None
+    if pick == "later":
+        return ready + " If you want the one-off review later, run `/tingle lookback start 30`."
+    if pick not in ("assess", "scan"):
+        return retry
+    try:
+        scan_id = lookback._run_scan(ctx, source, expected, DAYS, grant_assess=(pick == "assess"))
+        result = lookback.review_after_scan(ctx, source, expected, scan_id)
+    except (lookback.AssessmentCancelled, ValueError, sources.SourceReadError):
+        return ("Setup is complete, but the one-off Gmail review didn't finish. "
+                "Retry it with `/tingle lookback start 30`. Tingle will send follow-ups automatically when needed.")
+    if result.startswith("⏸ Review paused:"):
+        suffix = "Once you finish, Tingle will send follow-ups automatically when needed."
+    else:
+        suffix = ready
+    return result if "send follow-ups automatically when needed" in result else result + "\n" + suffix
 
 
 @store.serialized("onboarding")
