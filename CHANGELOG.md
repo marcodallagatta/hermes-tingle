@@ -4,7 +4,7 @@
 
 - Newer Hermes runtimes read retained chat history through the read-only persistence reader and apply message limits in the repository query. Older runtimes use the legacy `SessionDB` adapter only when the persistence-reader module is absent. If `hermes_state` is absent in the plugin runtime, or its import fails specifically because `hermes_constants.mkdir_under_hermes_home` is unavailable, chat history remains unavailable while the rest of Tingle registers; unrelated import failures are surfaced, and the collector reports `no_history_interface`.
 - A malformed available persistence interface or a real reader failure is surfaced as an incomplete chat review rather than silently disabling history. Gmail batch transport, source scope, and data retention are unchanged.
-- Local verification: standalone suite **2,748 passed, 31 skipped, 243 warnings**; required Hermes-runtime suite at core `caafe5389ae585ef77387a962aee05b1bcf17029`: **2,782 passed, 5 skipped, 244 warnings**; privacy gate passed; the disposable official plugin-admission runner passed with known Catalog rule 9 private-core-import warnings. Live-profile behavior was not tested.
+- Local verification: standalone suite **2,749 passed, 31 skipped, 243 warnings**; required Hermes-runtime suite at core `caafe5389ae585ef77387a962aee05b1bcf17029`: **2,783 passed, 5 skipped, 244 warnings**; privacy gate passed; the disposable official plugin-admission runner passed with known Catalog rule 9 private-core-import warnings. Live-profile behavior was not tested.
 
 ## 0.9.18 - connected setup and private look-back
 

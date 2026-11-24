@@ -192,6 +192,38 @@ def test_nested_persistence_import_failure_does_not_use_legacy_adapter(monkeypat
     assert legacy_calls == []
 
 
+def test_legacy_session_db_is_opened_only_on_chat_read():
+    open_calls = []
+    legacy = types.ModuleType("hermes_state")
+    legacy.DEFAULT_DB_PATH = "/synthetic/missing-state.db"
+
+    class MissingStateDB:
+        def __init__(self, path, read_only=False):
+            open_calls.append((path, read_only))
+            raise sqlite3.OperationalError("unable to open database file")
+
+        def list_gateway_sessions(self, *, platform=None, active_only=True):
+            raise AssertionError("failed constructor has no database methods")
+
+        def get_messages(self, session_id, limit=None, latest=False, include_ancestors=False):
+            raise AssertionError("failed constructor has no database methods")
+
+    setattr(legacy, "SessionDB", MissingStateDB)
+    ctx = _RuntimeCtx()
+    with patch.dict("sys.modules", {"persistence_assembly": None, "hermes_state": legacy}):
+        report = hermes_tingle.integrate(ctx)
+
+    assert report == {"chat_history": True, "inbound_hook": True}
+    assert ctx.hooks["post_gateway_admission"] is wiring.observe_admitted_inbound
+    assert "chat" in sources.source_capabilities()
+    assert open_calls == []  # plugin registration must not open Hermes state.db
+
+    with pytest.raises(RuntimeError, match="retained chat history session listing") as exc:
+        sources._chat_session_resolver("telegram", "1001")
+    assert "missing-state.db" not in str(exc.value)
+    assert open_calls == [("/synthetic/missing-state.db", True)]
+
+
 def test_unavailable_legacy_host_api_keeps_plugin_registered_without_chat_history(monkeypatch, caplog):
     sources.set_chat_history_interfaces(None, None)
     ctx = _RuntimeCtx()
@@ -336,8 +368,24 @@ class _RuntimeCtx:
 def _fake_hermes_state(db):
     """Stand-in for the public hermes_state runtime module."""
     module = types.ModuleType("hermes_state")
-    module.DEFAULT_DB_PATH = "/nonexistent/hermes/state.db"
-    module.SessionDB = lambda path, read_only=False: db
+    setattr(module, "DEFAULT_DB_PATH", "/nonexistent/hermes/state.db")
+
+    class FakeSessionDB:
+        def __init__(self, path, read_only=False):
+            self.path = path
+            self.read_only = read_only
+
+        def list_gateway_sessions(self, *, platform=None, active_only=True):
+            return db.list_gateway_sessions(platform=platform, active_only=active_only)
+
+        def get_messages(self, session_id, limit=None, latest=False, include_ancestors=False):
+            return db.get_messages(session_id, limit=limit, latest=latest,
+                                   include_ancestors=include_ancestors)
+
+        def close(self):
+            return None
+
+    setattr(module, "SessionDB", FakeSessionDB)
     return module
 
 
@@ -371,6 +419,11 @@ class TestRegisterGlue:
         assert ctx.hooks["post_gateway_admission"] is wiring.observe_admitted_inbound
         assert sources._chat_session_resolver is not None
         assert "chat" in sources.source_capabilities()
+        assert sources._chat_session_resolver("telegram", "1001") == ["sess-1", "sess-2"]
+        rows = list(sources._chat_message_reader("sess-1", limit=1))
+        assert rows == [{"role": "user", "content": "passport hello", "timestamp": 1763300000.0}]
+        assert db.list_calls == [("telegram", True)]
+        assert db.get_calls[0]["limit"] == 1
 
     def test_reader_bounds_history_at_the_query(self):
         db = _FakeStateDB()
