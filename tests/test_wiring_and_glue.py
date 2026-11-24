@@ -245,7 +245,7 @@ class TestRegisterGlue:
     def test_unbounded_reader_is_refused_before_invocation(self):
         called = []
 
-        def eager_reader(session_id):
+        def eager_reader(session_id, **kwargs):
             called.append(session_id)
             return [{"role": "user", "content": "synthetic private text"}] * 500
 

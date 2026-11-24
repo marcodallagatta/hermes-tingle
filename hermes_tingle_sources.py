@@ -912,12 +912,10 @@ def set_chat_history_interfaces(session_resolver: Any, message_reader: Any) -> N
         raise ValueError("chat history interfaces must be callable")
     try:
         parameters = inspect.signature(message_reader).parameters.values()
-        supports_limit = (
-            any(parameter.name == "limit" and parameter.kind in (
+        supports_limit = any(
+            parameter.name == "limit" and parameter.kind in (
                 inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-                for parameter in parameters)
-            or any(parameter.kind == inspect.Parameter.VAR_KEYWORD
-                   for parameter in parameters))
+            for parameter in parameters)
     except (TypeError, ValueError):
         supports_limit = False
     if not supports_limit:

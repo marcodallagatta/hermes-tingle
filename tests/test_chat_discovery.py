@@ -979,7 +979,7 @@ def test_staged_discovery_does_not_starve_later_bounded_leads(discovery_env):
 @pytest.mark.parametrize('session_id,content', [(None, 'I will arrange a synthetic meeting'),
     ('', 'I will arrange a synthetic meeting'), ('synthetic', {'text':'I will arrange a synthetic meeting'})])
 def test_discovery_requires_verified_locator_fields(discovery_env, session_id, content):
-    sources.set_chat_history_interfaces(lambda *a: [session_id], lambda *a, **kwargs: [message(content)])
+    sources.set_chat_history_interfaces(lambda *a: [session_id], lambda *a, limit=None: [message(content)])
     result = sources._collect_chat_matches(now=store._now(), discovery_enabled=True)
     assert result['discovery']['matches'] == []
 

@@ -50,7 +50,7 @@ def test_consented_chat_reader_failure_hides_incomplete_coverage(monkeypatch, ca
     store.add_item(title='Synthetic gym contract', next_check_at=datetime.now(timezone.utc)+timedelta(days=2))
     def fail(*args):
         raise RuntimeError('synthetic failure')
-    sources.set_chat_history_interfaces(fail, lambda *a, **kwargs: [])
+    sources.set_chat_history_interfaces(fail, lambda *a, limit=None: [])
     try:
         snapshot = sources.collect_snapshot()
         assert snapshot['chat_review']['incomplete_reasons'] == ['read_error']
