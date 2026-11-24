@@ -233,7 +233,7 @@ def test_public_copy_describes_record_only_approvals_and_no_external_messaging()
     description = schemas.HERMES_TINGLE["description"]
     bug_template = (root / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml").read_text(encoding="utf-8")
     assert "Tingle does not send messages to external counterparties" in readme
-    assert "this beta only records approve/reject decisions" in readme
+    assert "Item approvals only record your decision" in readme
     assert "Tingle does not initiate messages to external contacts or agents" in description
     assert "owner reminders and reports use the configured destination" in description
     assert "coordination attempt" not in bug_template
