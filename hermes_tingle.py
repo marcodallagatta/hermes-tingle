@@ -722,9 +722,12 @@ def integrate(ctx: Any) -> dict[str, Any]:
     """Runtime integration, called by the plugin's register(ctx) entry point.
 
     Wires, through verified pinned-runtime surfaces only:
-    - chat history: the read-only persistence reader, or a host-loadable public
-      legacy ``hermes_state`` adapter when that reader is absent; when neither
-      is available, chat history stays unwired and reports no capability;
+    - chat history: the read-only persistence reader, or the legacy public
+      ``hermes_state.SessionDB`` adapter when ``persistence_assembly`` is absent;
+      if ``hermes_state`` is absent in the plugin runtime or its import fails
+      specifically because ``hermes_constants.mkdir_under_hermes_home`` is
+      missing, chat history stays unwired and reports no capability; other
+      import and reader failures are surfaced;
     - source discovery: a post_gateway_admission observer at the admitted,
       post-auth lifecycle point that never alters dispatch.
     Returns a report of the available runtime interfaces."""

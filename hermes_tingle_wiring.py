@@ -185,10 +185,11 @@ def wire_from_runtime(ctx: Any = None) -> dict[str, bool]:
     """Wire what the pinned Hermes runtime makes available to a plugin.
 
     Newer Hermes runtimes use the read-only persistence reader. Older supported
-    runtimes try their public ``hermes_state.SessionDB`` surface. If that legacy
-    facade is unavailable in the plugin runtime, chat history stays unwired and
-    the source capability reports that clearly; failures from an available
-    reader or a malformed adapter are surfaced, not hidden.
+    runtimes try their public ``hermes_state.SessionDB`` surface. If the legacy
+    module is absent in the plugin runtime, or its import fails specifically
+    because ``hermes_constants.mkdir_under_hermes_home`` is missing, chat history
+    stays unwired and the source capability reports that clearly; other import
+    failures and errors from an available reader or malformed adapter are surfaced.
 
     Source discovery: the admitted-inbound hook is registered by integrate().
     """
