@@ -102,19 +102,65 @@ def test_review_decision_timeout_is_resumable_with_the_exact_command(env):
     import re
 
     sender, ctx = env[0], env[1]
-    text = plugin.handle_command(ctx, "lookback start 7", source=sender)
-    match = re.search(r"LB-[0-9A-F]{8}", text)
-    assert match, text
+    ctx.answers = ["scan", None]
+    paused = plugin.handle_command(ctx, "lookback start 7", source=sender)
+    match = re.search(r"LB-[0-9A-F]{8}", paused)
+    assert match, paused
     scan_id = match.group(0)
-    ctx.answers = [None]
-
-    paused = lb.review(ctx, sender, scan_id)
 
     assert "Review paused" in paused
     assert f"`/tingle lookback review {scan_id}`" in paused
     assert "nothing is added" in ctx.questions[-1][0].lower()
     assert f"If this decision times out, resume with `/tingle lookback review {scan_id}`" in ctx.questions[-1][0]
     assert not store.list_items()
+
+    # Exercise the exact advertised command after the decision timed out.
+    ctx.answers = ["skip"]
+    resumed = plugin.handle_command(ctx, f"lookback review {scan_id}", source=sender)
+    assert "Review done: 0 tracked, 1 skipped" in resumed
+    assert f"Finish with `/tingle lookback discard {scan_id}`" in resumed
+    assert "Sit back and relax; Tingle will send follow-ups automatically when needed." in resumed
+    assert not store.list_items()
+
+
+def test_scan_with_no_leads_completes_and_reassures_once(env, monkeypatch):
+    sender, ctx = env[0], env[1]
+    ctx.answers = ["scan"]
+    original = sources._gws_bridge
+
+    def empty_inbox(*args):
+        if args[3] == "list":
+            return {"messages": []}
+        return original(*args)
+
+    monkeypatch.setattr(sources, "_gws_bridge", empty_inbox)
+    out = plugin.handle_command(ctx, "lookback start 7", source=sender)
+
+    assert "No possible follow-ups in the checked messages" in out
+    assert out.count("Sit back and relax; Tingle will send follow-ups automatically when needed.") == 1
+    assert not store.list_items()
+
+
+def test_scan_reviews_leads_immediately_and_reassures_when_complete(env):
+    sender, ctx = env[0], env[1]
+    ctx.answers = ["scan", "skip"]
+
+    out = plugin.handle_command(ctx, "lookback start 7", source=sender)
+
+    assert "Review done: 0 tracked, 1 skipped" in out
+    assert out.count("Sit back and relax; Tingle will send follow-ups automatically when needed.") == 1
+    assert not store.list_items()
+
+
+def test_chat_enable_command_reports_unwired_and_leaves_chat_off(env, monkeypatch):
+    sender, ctx = env[0], env[1]
+    monkeypatch.setattr(sources, "source_capabilities", lambda: {"email", "calendar"})
+
+    out = plugin.handle_command(ctx, "source enable chat", source=sender)
+
+    assert "Chat history isn't wired into this Hermes runtime" in out
+    assert "no grant changed" in out
+    assert not any(row["kind"] == "chat" and row["enabled"] for row in store.list_source_optins())
 
 
 def test_scan_posts_progress_message(env):

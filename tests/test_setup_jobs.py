@@ -51,6 +51,8 @@ def test_fresh_setup_docs_use_one_approval_and_plain_defaults():
     assert "one plain-language approval screen" in onboarding
     assert "does not send the user back through questions" in onboarding
     assert "profile's Hermes `timezone`" in onboarding
+    assert "On an existing configured profile with an empty tracker" in onboarding
+    assert "fresh setup instead offers the separately confirmed private 30-day Gmail look-back" in onboarding
 
 
 def test_existing_installation_prompt_refresh_is_documented():

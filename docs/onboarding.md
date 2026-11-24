@@ -62,11 +62,11 @@ Each reminder cycle has at most four reserved attempts, including uncertain outp
 
 ## Import first if wanted, then track items
 
-Before adding a manual item, run `/tingle` in an owner DM to see the one-time import offer while the profile is empty. Then tell Hermes one real commitment and its due date or next check. `/tingle` lists unresolved active and missed items; edits, snooze and dismiss use the existing tracker behavior. Items belong to shared profile context, not a private area per sender. Setup adds no visitor access.
+Before adding a manual item, run `/tingle` in an owner DM. On an existing configured profile with an empty tracker, it may still show the one-time import offer; fresh setup instead offers the separately confirmed private 30-day Gmail look-back described above. Then tell Hermes one real commitment and its due date or next check. `/tingle` lists unresolved active and missed items; edits, snooze and dismiss use the existing tracker behavior. Items belong to shared profile context, not a private area per sender. Setup adds no visitor access.
 
 ## One-time hands-off import
 
-An existing configured profile with an empty tracker can still receive the one-time onboarding import offer on its first `/tingle`; that legacy path is separate from fresh setup's private review offer above. `/tingle undo onboarding` removes only items created by that import.
+An existing configured profile with an empty tracker can still receive the one-time legacy import offer on `/tingle`; this does not change standing source settings. `/tingle undo onboarding` removes only items created by that import.
 
 ## Optional first look-back
 
