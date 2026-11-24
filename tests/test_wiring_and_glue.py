@@ -242,6 +242,17 @@ class TestRegisterGlue:
         assert review["review_complete"] is False
         assert "bounded" in review["incomplete_reasons"]
 
+    def test_unbounded_reader_is_refused_before_invocation(self):
+        called = []
+
+        def eager_reader(session_id):
+            called.append(session_id)
+            return [{"role": "user", "content": "synthetic private text"}] * 500
+
+        with pytest.raises(ValueError, match="per-call limit"):
+            sources.set_chat_history_interfaces(lambda platform, chat_id: ["s"], eager_reader)
+        assert called == []
+
     def test_wire_chat_history_validates_shape(self):
         with pytest.raises(ValueError):
             wiring.wire_chat_history(object())

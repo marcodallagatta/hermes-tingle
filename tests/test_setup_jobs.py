@@ -58,9 +58,14 @@ def test_fresh_setup_docs_use_one_approval_and_plain_defaults():
 def test_chat_history_docs_match_multi_session_read_limits():
     root = Path(__file__).resolve().parents[1]
     readme = (root / "README.md").read_text(encoding="utf-8")
+    usage = (root / "skills/usage/SKILL.md").read_text(encoding="utf-8")
     assert "Up to 5 active session routes per chat (including separate threads/topics)" in readme
     assert "200 message reads per chat" in readme
     assert "only the current segment of the most recent live session" not in readme
+    assert "up to five active session routes per chat" in usage
+    assert "200 message reads total per chat, current segments only" in usage
+    assert "ended sessions, earlier lineage segments and compaction-archived history are not covered" in usage
+    assert "Hitting a bound is disclosed as an incomplete review" in usage
 
 
 def test_gmail_lookback_missing_bridge_fallback_is_documented():

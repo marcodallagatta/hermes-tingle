@@ -897,10 +897,11 @@ CHAT_COVERAGE_NOTE = (
 
 
 def set_chat_history_interfaces(session_resolver: Any, message_reader: Any) -> None:
-    """Operator wiring: inject the Hermes session-history read interfaces.
-    Both must be callables; passing None for either unwires the collector. The
-    bounded reader passes ``limit`` before storage access when supported and
-    clips legacy injected readers during iteration.
+    """Inject the Hermes session-history interfaces.
+
+    The message reader must accept a keyword ``limit`` so the per-chat budget
+    is enforced before it touches storage. Passing None for either interface
+    unwires the collector; an unbounded reader is rejected before registration.
     """
     global _chat_session_resolver, _chat_message_reader
     if session_resolver is None or message_reader is None:
@@ -909,14 +910,18 @@ def set_chat_history_interfaces(session_resolver: Any, message_reader: Any) -> N
         return
     if not callable(session_resolver) or not callable(message_reader):
         raise ValueError("chat history interfaces must be callable")
-    _chat_session_resolver = session_resolver
     try:
         parameters = inspect.signature(message_reader).parameters.values()
-        supports_limit = (any(parameter.name == "limit" for parameter in parameters)
-                          or any(parameter.kind == inspect.Parameter.VAR_KEYWORD
-                                 for parameter in parameters))
+        supports_limit = (
+            any(parameter.name == "limit" and parameter.kind in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+                for parameter in parameters)
+            or any(parameter.kind == inspect.Parameter.VAR_KEYWORD
+                   for parameter in parameters))
     except (TypeError, ValueError):
         supports_limit = False
+    if not supports_limit:
+        raise ValueError("chat message reader must accept a per-call limit")
 
     def bounded_message_reader(session_id: str, limit: int = MAX_CHAT_READS_PER_CHAT):
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
@@ -924,14 +929,11 @@ def set_chat_history_interfaces(session_resolver: Any, message_reader: Any) -> N
         bounded_limit = min(limit, MAX_CHAT_READS_PER_CHAT)
         if bounded_limit == 0:
             return
-        rows: Any
-        if supports_limit:
-            rows = message_reader(session_id, limit=bounded_limit)
-        else:
-            rows = message_reader(session_id)
+        rows: Any = message_reader(session_id, limit=bounded_limit)
         iterable = rows if rows is not None else ()
         yield from itertools.islice(iter(iterable), bounded_limit)
 
+    _chat_session_resolver = session_resolver
     _chat_message_reader = bounded_message_reader
 
 

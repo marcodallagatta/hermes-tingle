@@ -16,10 +16,10 @@ implementation, so it is never used - and compaction-archived rows are
 excluded. The collector's review carries a ``coverage`` field stating this;
 it never implies full history.
 
-Source-side bounds: the reader asks the store for the newest
-``MAX_CHAT_READS_PER_CHAT + 1`` messages per session (latest+limit, single
-segment, so a truncated window is detectable and disclosed, never silently
-complete; the collector enforces the 200-read per-chat cap across sessions).
+Source-side bounds: each session query requests only the remaining per-chat
+budget, with ``latest=True`` and ``include_ancestors=False``. The collector
+adds the returned rows to one aggregate cap across selected sessions and marks
+the review incomplete when that cap is reached; it fetches no sentinel row.
 """
 
 from __future__ import annotations

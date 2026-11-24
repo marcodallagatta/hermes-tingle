@@ -6,6 +6,7 @@ untrusted-flagged leads.
 
 from __future__ import annotations
 
+import itertools
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -44,9 +45,12 @@ def _msg(text, hours_ago=1, role="user"):
 
 
 def _wire(sessions=("sess-1",), messages=()):
+    def read_messages(session_id, limit):
+        return list(itertools.islice(iter(messages), limit))
+
     sources.set_chat_history_interfaces(
         lambda platform, chat_id: list(sessions),
-        lambda session_id: list(messages),
+        read_messages,
     )
 
 
@@ -70,7 +74,7 @@ class TestGating:
         store.revoke_chat_consent("telegram:1001")
         seen = []
         sources.set_chat_history_interfaces(
-            lambda p, c: seen.append((p, c)) or ["sess-1"], lambda s: [_msg("hi")])
+            lambda p, c: seen.append((p, c)) or ["sess-1"], lambda s, limit=None: [_msg("hi")])
         review = sources._collect_chat_matches(now=NOW)
         assert review["review_complete"] is False  # no active consents
         assert seen == []
@@ -114,7 +118,7 @@ class TestCollection:
         seen = []
         sources.set_chat_history_interfaces(
             lambda p, c: seen.append("resolver") or ["s1"],
-            lambda s: seen.append("reader") or [_msg("anything")])
+            lambda s, limit=None: seen.append("reader") or [_msg("anything")])
         review = sources._collect_chat_matches(now=NOW)
         assert review["matches"] == [] and review["skipped"] == "no_active_items"
         assert seen == []  # no resolver or reader call at all
@@ -160,7 +164,7 @@ class TestCollection:
         _item(isolated_store)
         seen = []
 
-        def messages(session_id):
+        def messages(session_id, limit=None):
             for i in range(1000):
                 seen.append(i)
                 yield _msg(f"passport m{i}", hours_ago=0.01)
@@ -184,7 +188,7 @@ class TestCollection:
         _consent()
         _item(isolated_store)
         sources.set_chat_history_interfaces(
-            lambda p, c: (_ for _ in ()).throw(RuntimeError("db gone")), None or (lambda s: []))
+            lambda p, c: (_ for _ in ()).throw(RuntimeError("db gone")), None or (lambda s, limit=None: []))
         review = sources._collect_chat_matches(now=NOW)
         assert review["review_complete"] is False
         assert "read_error" in review["incomplete_reasons"]

@@ -240,7 +240,7 @@ def test_context_marker_is_not_delivery_and_owner_recovery_requeues(env,monkeypa
     store.add_item(title='Synthetic gym renewal')
     now=datetime.now(timezone.utc)
     msg={'role':'user','content':'gym renewal is due','timestamp':now.timestamp()}
-    sources.set_chat_history_interfaces(lambda p,c:['sess-1'],lambda s:[msg])
+    sources.set_chat_history_interfaces(lambda p,c:['sess-1'],lambda s, limit=None: [msg])
     review=sources._collect_chat_matches(now=now)
     marked=json.loads(plugin.handle_tool(None,{'action':'mark_context_reviewed','review_receipt':review['matches'][0]['review_receipt']}))
     assert marked['success'] and marked['delivery_confirmed'] is False

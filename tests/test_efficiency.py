@@ -28,8 +28,8 @@ def lead(monkeypatch):
     store.enable_source('chat',lookback_days=7,enabled_by='fixture')
     store.note_known_chat('telegram:42')
     sources.set_chat_history_interfaces(
-        lambda *a:['s1'],
-        lambda *a:[{'role':'user','content':'gym-contract','timestamp':NOW.timestamp()}])
+        lambda *a, **kwargs:['s1'],
+        lambda *a, **kwargs:[{'role':'user','content':'gym-contract','timestamp':NOW.timestamp()}])
     yield item
     sources.set_chat_history_interfaces(None,None)
 
@@ -51,8 +51,8 @@ def test_emission_or_lost_agent_response_does_not_mark_reviewed(lead):
 def test_changed_source_content_reappears(lead,monkeypatch):
     ack(collect()['matches'][0]['review_receipt'])
     sources.set_chat_history_interfaces(
-        lambda *a:['s1'],
-        lambda *a:[{'role':'user','content':'gym-contract revised','timestamp':NOW.timestamp()+3600}])
+        lambda *a, **kwargs:['s1'],
+        lambda *a, **kwargs:[{'role':'user','content':'gym-contract revised','timestamp':NOW.timestamp()+3600}])
     assert collect()['matches']
 
 
@@ -92,7 +92,7 @@ def test_chat_consent_invalidation_and_no_content_in_receipts(monkeypatch):
     store.add_item(title='Gym renewal')
     store.enable_source('chat',lookback_days=7,enabled_by='fixture')
     store.grant_chat_consent('telegram:42',lookback_days=7,granted_by='telegram:42')
-    sources.set_chat_history_interfaces(lambda *a:['s1'],lambda *a:[{'role':'user','content':'Gym renewal needs review','timestamp':NOW.timestamp()}])
+    sources.set_chat_history_interfaces(lambda *a, **kwargs:['s1'],lambda *a, **kwargs:[{'role':'user','content':'Gym renewal needs review','timestamp':NOW.timestamp()}])
     try:
         first=sources._collect_chat_matches(now=NOW)
         receipt=first['matches'][0]['review_receipt']
@@ -165,7 +165,7 @@ def test_actual_pinned_cron_wake_gate_prevents_prompt_construction(monkeypatch):
 
 def test_reviewed_matches_do_not_starve_later_leads(lead,monkeypatch):
     total=sources.MAX_CHAT_MESSAGES_PER_CHAT+10
-    sources.set_chat_history_interfaces(lambda *a:['s1'],lambda *a:[
+    sources.set_chat_history_interfaces(lambda *a, **kwargs:['s1'],lambda *a, **kwargs:[
         {'role':'user','content':f'gym-contract detail {i}','timestamp':NOW.timestamp()-i} for i in range(total)])
     first=collect();assert len(first['matches'])==sources.MAX_CHAT_MESSAGES_PER_CHAT
     for match in first['matches']:assert ack(match['review_receipt'])['success']
@@ -201,7 +201,7 @@ def test_reviewed_chat_matches_do_not_starve_later_bounded_messages(monkeypatch)
     store.enable_source('chat',lookback_days=7,enabled_by='fixture')
     store.grant_chat_consent('telegram:42',lookback_days=7,granted_by='telegram:42')
     count=sources.MAX_CHAT_MESSAGES_PER_CHAT+2
-    sources.set_chat_history_interfaces(lambda *a:['s'],lambda *a:[
+    sources.set_chat_history_interfaces(lambda *a, **kwargs:['s'],lambda *a, **kwargs:[
         {'role':'user','content':f'Gym renewal detail {i}','timestamp':NOW.timestamp()-i} for i in range(count)])
     try:
         first=sources._collect_chat_matches(now=NOW)
