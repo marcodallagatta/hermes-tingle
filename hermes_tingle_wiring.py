@@ -14,10 +14,12 @@ them. It covers each selected session's CURRENT segment - ancestor lineage
 expansion materializes every lineage row before limiting in the pinned
 implementation, so it is never used - and compaction-archived rows are
 excluded. The collector's review carries a ``coverage`` field stating this;
-it never implies full history. Route discovery enumerates active routing
-metadata for the platform before filtering to the requested chat; the five-route
-and 200-message caps bound transcript reads, not this metadata enumeration.
-Messages from other chats are not fetched.
+it never implies full history. Route discovery calls Hermes for active session
+records platform-wide; these full rows can include stored prompt/config fields.
+Tingle uses only ``id``, ``source`` and ``chat_id`` to select routes, and does
+not persist or transmit other returned fields. The five-route and 200-message
+caps bound transcript reads, not the platform-wide listing; no messages from
+other chats are fetched.
 
 Source-side bounds: each session query requests only the remaining per-chat
 budget, with ``latest=True`` and ``include_ancestors=False``. The collector

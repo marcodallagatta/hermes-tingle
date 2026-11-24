@@ -66,10 +66,13 @@ def test_chat_history_docs_match_multi_session_read_limits():
     assert "200 message reads total per chat, current segments only" in usage
     assert "ended sessions, earlier lineage segments and compaction-archived history are not covered" in usage.lower()
     assert "Hitting a bound is disclosed as an incomplete review" in usage
-    disclosure = "active route metadata is enumerated platform-wide before filtering to this chat"
+    disclosure = "active session records platform-wide"
     assert disclosure in readme.lower()
     assert disclosure in usage.lower()
-    assert "messages from other chats aren't read" in usage
+    for doc in (readme.lower(), usage.lower()):
+        assert "including stored prompt/config fields" in doc
+        assert "does not persist or send other row fields" in doc
+        assert "or fetch messages from unrelated chats" in doc
     assert "does not change the standing email grant or start an ongoing scan" in usage
 
 

@@ -135,6 +135,9 @@ def test_first_tingle_offers_one_approval_with_hermes_defaults(guided):
     assert 'Europe/Berlin' in question and 'Gmail' in question and 'read-only' in question
     assert 'Google may refresh its saved sign-in' in question
     assert 'chat checks access without reading messages' in question
+    assert 'active session records across this platform' in question
+    assert 'stored prompt/config fields' in question
+    assert 'does not persist or send the other fields' in question
     assert 'Turning a source off stops future reads' in question
     assert "can't pull back content already sent" in question
     assert 'Google Drive is not' in question

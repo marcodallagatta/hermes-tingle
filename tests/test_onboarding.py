@@ -344,6 +344,9 @@ def test_source_privacy_before_enable_direction(monkeypatch):
     assert "can't pull back content already sent" in result
     assert "Google may refresh its saved sign-in on this profile" in result
     assert "chat checks access without reading messages" in result
+    assert "active session records across this platform" in result
+    assert "stored prompt/config fields" in result
+    assert "does not persist or send the other fields" in result
 
 
 def use_real_identity(monkeypatch):

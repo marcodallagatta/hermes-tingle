@@ -170,8 +170,9 @@ class TestRegisterGlue:
         assert "up to 5 active session routes per chat" in review["coverage"]
         assert "including separate threads/topics" in review["coverage"]
         assert "200 message reads per chat" in review["coverage"]
-        assert "active route metadata is enumerated platform-wide before filtering to this chat" in review["coverage"]
-        assert "messages from other chats aren't read" in review["coverage"]
+        assert "active session records (including stored prompt/config fields) are listed platform-wide" in review["coverage"]
+        assert "only session IDs/platform/chat IDs are used" in review["coverage"]
+        assert "no messages from other chats are fetched" in review["coverage"]
         assert "ended sessions" in review["coverage"]
         assert "not covered" in review["coverage"]
 

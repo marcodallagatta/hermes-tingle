@@ -893,17 +893,20 @@ CHAT_COVERAGE_NOTE = (
     f"up to {MAX_CHAT_SESSIONS_PER_CHAT} active session routes per chat (including separate threads/topics), "
     "current segment only; "
     f"up to {MAX_CHAT_READS_PER_CHAT} message reads per chat; "
-    "active route metadata is enumerated platform-wide before filtering to this chat; "
-    "messages from other chats aren't read; "
+    "active session records (including stored prompt/config fields) are listed platform-wide; "
+    "only session IDs/platform/chat IDs are used and other row fields aren't persisted or sent; "
+    "no messages from other chats are fetched; "
     "ended sessions, earlier lineage segments and compaction-archived history are not covered")
 
 
 def set_chat_history_interfaces(session_resolver: Any, message_reader: Any) -> None:
     """Inject the Hermes session-history interfaces.
 
-    The message reader must accept a keyword ``limit`` so the per-chat budget
-    is enforced before it touches storage. Passing None for either interface
-    unwires the collector; an unbounded reader is rejected before registration.
+    The message reader must explicitly accept a keyword ``limit`` and must
+    enforce it before touching storage. This setter can check the signature but
+    cannot prove an injected implementation honors that contract; the built-in
+    Hermes adapter applies the limit in SQL. Passing None for either interface
+    unwires the collector, and readers without an explicit limit are rejected.
     """
     global _chat_session_resolver, _chat_message_reader
     if session_resolver is None or message_reader is None:
@@ -2646,7 +2649,10 @@ def probe_source(kind: str) -> str | None:
 def source_privacy_notice() -> str:
     return ("Connection checks do not read email messages or event details. Google may refresh its saved sign-in on this profile; "
             "chat checks access without reading messages. Later source text and tracked details may be sent to your "
-            "configured AI provider and appear in Hermes history. Turning a source off stops future reads, but "
+            "configured AI provider and appear in Hermes history. Later chat reviews first list active session records "
+            "across this platform; these rows can include stored prompt/config fields. Tingle uses only session ID, "
+            "platform and chat ID to filter them, does not persist or send the other fields, and fetches no messages "
+            "from unrelated chats. Turning a source off stops future reads, but "
             "can't pull back content already sent or saved.")
 
 
