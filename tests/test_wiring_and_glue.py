@@ -5,11 +5,13 @@ partial coverage."""
 
 from __future__ import annotations
 
+import builtins
 import sqlite3
 import subprocess
 import sys
 import types
 import asyncio
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,6 +66,273 @@ class _FakeStateDB:
         return [{"role": "user", "content": "passport hello", "created_at": 1763300000.0}]
 
 
+def _install_fake_persistence_reader(monkeypatch, home, calls, *, fail_open=False):
+    class TranscriptRead:
+        def __init__(self, *, limit=None, latest=False, include_lineage=False):
+            self.limit = limit
+            self.latest = latest
+            self.include_lineage = include_lineage
+
+    class Sessions:
+        def list_gateway_sessions(self, *, platform=None, active_only=True):
+            calls["session_query"] = (platform, active_only)
+            return [
+                types.SimpleNamespace(session=types.SimpleNamespace(
+                    session_id="sess-1", source="telegram", chat_id="1001", thread_id="",
+                    session_key="telegram:1001")),
+                types.SimpleNamespace(session=types.SimpleNamespace(
+                    session_id="sess-2", source="Telegram", chat_id="1001", thread_id="topic-2",
+                    session_key="telegram:1001:topic-2")),
+                types.SimpleNamespace(session=types.SimpleNamespace(
+                    session_id="other-chat", source="telegram", chat_id="2002", thread_id="",
+                    session_key="telegram:2002")),
+            ]
+
+    class Messages:
+        def read_transcript(self, session_id, request):
+            calls["transcript_query"] = (session_id, request)
+            return (types.SimpleNamespace(role="user", content="synthetic message", timestamp=1763300000.0),)
+
+    store = types.SimpleNamespace(sessions=Sessions(), messages=Messages())
+    assembly = types.ModuleType("persistence_assembly")
+
+    @contextmanager
+    def open_persistence_reader(target):
+        calls.setdefault("reader_targets", []).append(target)
+        if fail_open:
+            raise OSError("private synthetic store path")
+        yield store
+
+    setattr(assembly, "open_persistence_reader", open_persistence_reader)
+    persistence = types.ModuleType("persistence")
+    persistence.__path__ = []
+    conversation = types.ModuleType("persistence.conversation")
+    conversation.__path__ = []
+    messages = types.ModuleType("persistence.conversation.messages")
+    setattr(messages, "TranscriptRead", TranscriptRead)
+    constants = types.ModuleType("hermes_constants")
+    setattr(constants, "get_hermes_home", lambda: home)
+    for name, module in {
+        "persistence_assembly": assembly,
+        "persistence": persistence,
+        "persistence.conversation": conversation,
+        "persistence.conversation.messages": messages,
+        "hermes_constants": constants,
+        "hermes_state": None,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    return store
+
+
+def test_runtime_wires_bounded_persistence_reader(monkeypatch, tmp_path):
+    calls = {}
+    _install_fake_persistence_reader(monkeypatch, tmp_path, calls)
+
+    report = wiring.wire_from_runtime()
+
+    assert report["chat_history"] is True
+    assert calls.get("reader_targets", []) == []  # readers open only when a source read is requested
+    sessions = sources._chat_session_resolver("telegram", "1001")
+    assert sessions == ["sess-1", "sess-2"]
+    assert calls["session_query"] == ("telegram", True)
+    rows = list(sources._chat_message_reader("sess-1", limit=2))
+    assert rows == [{"role": "user", "content": "synthetic message", "timestamp": 1763300000.0}]
+    session_id, request = calls["transcript_query"]
+    assert session_id == "sess-1"
+    assert request.limit == 2 and request.latest is True and request.include_lineage is False
+    assert calls["reader_targets"] == [tmp_path, tmp_path]
+
+
+def test_persistence_reader_failure_is_not_silently_fallbacked(monkeypatch, tmp_path):
+    calls = {}
+    _install_fake_persistence_reader(monkeypatch, tmp_path, calls, fail_open=True)
+
+    report = wiring.wire_from_runtime()
+    assert report["chat_history"] is True
+    with pytest.raises(RuntimeError, match="retained chat history") as exc:
+        sources._chat_session_resolver("telegram", "1001")
+    assert "private synthetic store path" not in str(exc.value)
+    assert calls["reader_targets"] == [tmp_path]
+
+
+def test_malformed_persistence_session_record_is_surfaced(monkeypatch, tmp_path):
+    calls = {}
+    store = _install_fake_persistence_reader(monkeypatch, tmp_path, calls)
+    monkeypatch.setattr(
+        store.sessions, "list_gateway_sessions",
+        lambda **kwargs: [types.SimpleNamespace(session=object())])
+
+    wiring.wire_from_runtime()
+    with pytest.raises(RuntimeError, match="retained chat history session listing"):
+        sources._chat_session_resolver("telegram", "1001")
+
+
+def test_nested_persistence_import_failure_does_not_use_legacy_adapter(monkeypatch):
+    legacy_calls = []
+    legacy = types.ModuleType("hermes_state")
+    setattr(legacy, "DEFAULT_DB_PATH", "/synthetic/state.db")
+
+    def legacy_session_db(path, read_only=False):
+        legacy_calls.append((path, read_only))
+        return _FakeStateDB()
+
+    setattr(legacy, "SessionDB", legacy_session_db)
+    original_import = builtins.__import__
+
+    def fail_nested_reader_dependency(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "persistence_assembly":
+            raise ModuleNotFoundError("No module named 'persistence_backend'", name="persistence_backend")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setitem(sys.modules, "hermes_state", legacy)
+    monkeypatch.setattr(builtins, "__import__", fail_nested_reader_dependency)
+
+    with pytest.raises(RuntimeError, match="reader could not be imported"):
+        wiring.wire_from_runtime()
+    assert legacy_calls == []
+
+
+def test_legacy_session_db_is_opened_only_on_chat_read():
+    open_calls = []
+    legacy = types.ModuleType("hermes_state")
+    legacy.DEFAULT_DB_PATH = "/synthetic/missing-state.db"
+
+    class MissingStateDB:
+        def __init__(self, path, read_only=False):
+            open_calls.append((path, read_only))
+            raise sqlite3.OperationalError("unable to open database file")
+
+        def list_gateway_sessions(self, *, platform=None, active_only=True):
+            raise AssertionError("failed constructor has no database methods")
+
+        def get_messages(self, session_id, limit=None, latest=False, include_ancestors=False):
+            raise AssertionError("failed constructor has no database methods")
+
+    setattr(legacy, "SessionDB", MissingStateDB)
+    ctx = _RuntimeCtx()
+    with patch.dict("sys.modules", {"persistence_assembly": None, "hermes_state": legacy}):
+        report = hermes_tingle.integrate(ctx)
+
+    assert report == {"chat_history": True, "inbound_hook": True}
+    assert ctx.hooks["post_gateway_admission"] is wiring.observe_admitted_inbound
+    assert "chat" in sources.source_capabilities()
+    assert open_calls == []  # plugin registration must not open Hermes state.db
+
+    with pytest.raises(RuntimeError, match="retained chat history session listing") as exc:
+        sources._chat_session_resolver("telegram", "1001")
+    assert "missing-state.db" not in str(exc.value)
+    assert open_calls == [("/synthetic/missing-state.db", True)]
+
+
+def test_unavailable_legacy_host_api_keeps_plugin_registered_without_chat_history(monkeypatch, caplog):
+    sources.set_chat_history_interfaces(None, None)
+    ctx = _RuntimeCtx()
+    original_import = builtins.__import__
+
+    def fail_legacy_host_helper(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "persistence_assembly":
+            raise ModuleNotFoundError("No module named 'persistence_assembly'", name="persistence_assembly")
+        if name == "hermes_state":
+            raise ImportError(
+                "cannot import name 'mkdir_under_hermes_home' from 'hermes_constants' (unknown location)",
+                name="hermes_constants",
+            )
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fail_legacy_host_helper)
+    with caplog.at_level("WARNING", logger=wiring.__name__):
+        report = hermes_tingle.integrate(ctx)
+
+    assert report == {"chat_history": False, "inbound_hook": True}
+    assert "chat" not in sources.source_capabilities()
+    assert ctx.hooks["post_gateway_admission"] is wiring.observe_admitted_inbound
+    assert "legacy chat-history adapter unavailable" in caplog.text
+
+
+def test_unavailable_legacy_host_api_preserves_injected_chat_history(monkeypatch):
+    calls = {}
+
+    def session_resolver(platform, chat_id):
+        calls["resolve"] = (platform, chat_id)
+        return ["kept-session"]
+
+    def message_reader(session_id, *, limit):
+        calls["read"] = (session_id, limit)
+        return [{"role": "user", "content": "synthetic retained row", "timestamp": 1.0}]
+
+    sources.set_chat_history_interfaces(session_resolver, message_reader)
+    resolver_before = sources._chat_session_resolver
+    reader_before = sources._chat_message_reader
+    original_import = builtins.__import__
+
+    def fail_legacy_host_helper(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "persistence_assembly":
+            raise ModuleNotFoundError("No module named 'persistence_assembly'", name="persistence_assembly")
+        if name == "hermes_state":
+            raise ImportError(
+                "cannot import name 'mkdir_under_hermes_home' from 'hermes_constants' (unknown location)",
+                name="hermes_constants",
+            )
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fail_legacy_host_helper)
+    report = wiring.wire_from_runtime()
+
+    assert report == {"chat_history": False}
+    assert sources._chat_session_resolver is resolver_before
+    assert sources._chat_message_reader is reader_before
+    assert "chat" in sources.source_capabilities()
+    assert sources._chat_session_resolver("telegram", "1001") == ["kept-session"]
+    assert list(sources._chat_message_reader("kept-session", limit=1)) == [
+        {"role": "user", "content": "synthetic retained row", "timestamp": 1.0}]
+    assert calls == {"resolve": ("telegram", "1001"), "read": ("kept-session", 1)}
+
+
+def test_unexpected_legacy_import_failure_is_surfaced(monkeypatch):
+    original_import = builtins.__import__
+
+    def fail_unexpected_legacy_dependency(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "persistence_assembly":
+            raise ModuleNotFoundError("No module named 'persistence_assembly'", name="persistence_assembly")
+        if name == "hermes_state":
+            raise ImportError("synthetic database dependency failure", name="sqlite3")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fail_unexpected_legacy_dependency)
+    with pytest.raises(RuntimeError, match="adapter could not be imported"):
+        wiring.wire_from_runtime()
+
+
+def test_persistence_reader_clamps_oversized_limit_before_query(monkeypatch, tmp_path):
+    calls = {}
+    _install_fake_persistence_reader(monkeypatch, tmp_path, calls)
+    wiring.wire_from_runtime()
+
+    rows = list(sources._chat_message_reader(
+        "sess-1", limit=sources.MAX_CHAT_READS_PER_CHAT + 17))
+
+    assert rows == [{"role": "user", "content": "synthetic message", "timestamp": 1763300000.0}]
+    _, request = calls["transcript_query"]
+    assert request.limit == sources.MAX_CHAT_READS_PER_CHAT
+
+
+def test_persistence_transcript_read_failure_is_surfaced_without_details(monkeypatch, tmp_path):
+    calls = {}
+    store = _install_fake_persistence_reader(monkeypatch, tmp_path, calls)
+
+    def fail_read(session_id, request):
+        calls["transcript_query"] = (session_id, request)
+        raise OSError("synthetic private read failure")
+
+    monkeypatch.setattr(store.messages, "read_transcript", fail_read)
+    wiring.wire_from_runtime()
+
+    with pytest.raises(RuntimeError, match="retained chat history message read failed") as exc:
+        list(sources._chat_message_reader("sess-1", limit=2))
+    assert "synthetic private read failure" not in str(exc.value)
+    assert calls["transcript_query"][0] == "sess-1"
+
+
 
 
 
@@ -99,8 +368,24 @@ class _RuntimeCtx:
 def _fake_hermes_state(db):
     """Stand-in for the public hermes_state runtime module."""
     module = types.ModuleType("hermes_state")
-    module.DEFAULT_DB_PATH = "/nonexistent/hermes/state.db"
-    module.SessionDB = lambda path, read_only=False: db
+    setattr(module, "DEFAULT_DB_PATH", "/nonexistent/hermes/state.db")
+
+    class FakeSessionDB:
+        def __init__(self, path, read_only=False):
+            self.path = path
+            self.read_only = read_only
+
+        def list_gateway_sessions(self, *, platform=None, active_only=True):
+            return db.list_gateway_sessions(platform=platform, active_only=active_only)
+
+        def get_messages(self, session_id, limit=None, latest=False, include_ancestors=False):
+            return db.get_messages(session_id, limit=limit, latest=latest,
+                                   include_ancestors=include_ancestors)
+
+        def close(self):
+            return None
+
+    setattr(module, "SessionDB", FakeSessionDB)
     return module
 
 
@@ -118,7 +403,7 @@ class TestRegisterGlue:
         class BareCtx:  # a ctx without the integration surfaces
             pass
 
-        with patch.dict("sys.modules", {"hermes_state": None}):
+        with patch.dict("sys.modules", {"persistence_assembly": None, "hermes_state": None}):
             report = hermes_tingle.integrate(BareCtx())
         assert report == {"chat_history": False, "inbound_hook": False}
         assert sources._chat_session_resolver is None
@@ -126,7 +411,7 @@ class TestRegisterGlue:
     def test_integrate_wires_offered_interfaces(self):
         db = _FakeStateDB()
         ctx = _RuntimeCtx()
-        with patch.dict("sys.modules", {"hermes_state": _fake_hermes_state(db)}):
+        with patch.dict("sys.modules", {"persistence_assembly": None, "hermes_state": _fake_hermes_state(db)}):
             report = hermes_tingle.integrate(ctx)
         assert report["chat_history"] is True
         assert report["inbound_hook"] is True
@@ -134,6 +419,11 @@ class TestRegisterGlue:
         assert ctx.hooks["post_gateway_admission"] is wiring.observe_admitted_inbound
         assert sources._chat_session_resolver is not None
         assert "chat" in sources.source_capabilities()
+        assert sources._chat_session_resolver("telegram", "1001") == ["sess-1", "sess-2"]
+        rows = list(sources._chat_message_reader("sess-1", limit=1))
+        assert rows == [{"role": "user", "content": "passport hello", "timestamp": 1763300000.0}]
+        assert db.list_calls == [("telegram", True)]
+        assert db.get_calls[0]["limit"] == 1
 
     def test_reader_bounds_history_at_the_query(self):
         db = _FakeStateDB()
@@ -366,7 +656,7 @@ class TestPackageModeLoad:
 def test_plugin_registers_history_and_admission_without_a_platform_factory(isolated_store):
     db = _FakeStateDB()
     ctx = _RuntimeCtx()
-    with patch.dict("sys.modules", {"hermes_state": _fake_hermes_state(db)}):
+    with patch.dict("sys.modules", {"persistence_assembly": None, "hermes_state": _fake_hermes_state(db)}):
         plugin.register(ctx)
     assert any(t["name"] == "hermes_tingle" for t in ctx.tools)
     assert any(name == "tingle" for name, _ in ctx.commands)
@@ -380,7 +670,7 @@ def test_plugin_registers_history_and_admission_without_a_platform_factory(isola
 
 def test_plugin_registers_without_runtime():
     ctx = _RuntimeCtx()
-    with patch.dict("sys.modules", {"hermes_state": None}):
+    with patch.dict("sys.modules", {"persistence_assembly": None, "hermes_state": None}):
         plugin.register(ctx)
     assert sources._chat_session_resolver is None
     assert not ctx.platform_handlers
@@ -396,7 +686,7 @@ class TestAdmissionChatDiscovery:
 
     def _hook(self):
         ctx = _RuntimeCtx()
-        with patch.dict("sys.modules", {"hermes_state": None}):
+        with patch.dict("sys.modules", {"persistence_assembly": None, "hermes_state": None}):
             plugin.register(ctx)
         return ctx.hooks["post_gateway_admission"]
 

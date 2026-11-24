@@ -30,7 +30,9 @@ the review incomplete when that cap is reached; it fetches no sentinel row.
 from __future__ import annotations
 
 import itertools
-from typing import Any
+import logging
+from pathlib import Path
+from typing import Any, Callable, ContextManager, Iterable, cast
 
 try:
     from . import hermes_tingle_sources as sources
@@ -38,6 +40,7 @@ except ImportError:  # pragma: no cover - top-level pytest import
     import hermes_tingle_sources as sources
 
 CHAT_COVERAGE_NOTE = sources.CHAT_COVERAGE_NOTE
+_LOGGER = logging.getLogger(__name__)
 
 def wire_chat_history(state_db: Any | None) -> None:
     """Connect Hermes' retained session store as the chat history source.
@@ -109,27 +112,190 @@ def wire_chat_history(state_db: Any | None) -> None:
     sources.set_chat_history_interfaces(session_resolver, message_reader)
 
 
+class _LazyLegacySessionDB:
+    """Open a read-only legacy ``SessionDB`` only when chat data is requested.
+
+    Newer persistence readers are already lazy. Eagerly constructing the legacy
+    read-only handle during plugin registration fails on fresh homes without a
+    ``state.db`` and opens the session store before any consented source read.
+    This facade preserves the public SessionDB shape while opening and closing a
+    bounded read-only handle for each resolver or transcript callback.
+    """
+
+    _METHODS = ("list_gateway_sessions", "find_session_by_origin", "get_messages")
+
+    def __init__(self, session_db_cls: Any, db_path: Any):
+        if not callable(session_db_cls):
+            raise ValueError("legacy SessionDB factory must be callable")
+        self._session_db_cls = session_db_cls
+        self._db_path = db_path
+        self._available = {
+            name: callable(getattr(session_db_cls, name, None)) for name in self._METHODS
+        }
+        if (not self._available["get_messages"]
+                or not (self._available["list_gateway_sessions"]
+                        or self._available["find_session_by_origin"])):
+            raise ValueError("legacy SessionDB class has an incomplete read-only surface")
+
+    def __getattr__(self, name: str) -> Any:
+        if name not in self._available or not self._available[name]:
+            raise AttributeError(name)
+        return self._build_reader(name)
+
+    def _build_reader(self, method_name: str) -> Callable[..., Any]:
+        label = "message read" if method_name == "get_messages" else "session listing"
+
+        def read(*args: Any, **kwargs: Any) -> Any:
+            try:
+                db = self._session_db_cls(self._db_path, read_only=True)
+                try:
+                    method = getattr(db, method_name, None)
+                    if not callable(method):
+                        raise TypeError(f"SessionDB does not expose {method_name}")
+                    rows = cast(Any, method(*args, **kwargs))
+                    if method_name == "list_gateway_sessions":
+                        return None if rows is None else list(cast(Iterable[Any], rows))
+                    if method_name == "get_messages" and rows is not None:
+                        limit = kwargs.get("limit")
+                        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+                            raise ValueError("chat message read limit must be a non-negative integer")
+                        return list(itertools.islice(iter(cast(Iterable[Any], rows)), limit))
+                    return rows
+                finally:
+                    close = getattr(db, "close", None)
+                    if callable(close):
+                        close()
+            except Exception:
+                raise RuntimeError(f"Hermes retained chat history {label} failed") from None
+
+        return read
+
+
+def wire_chat_history_from_persistence(
+    reader_factory: Callable[[], ContextManager[Any]], transcript_read_type: Any,
+) -> None:
+    """Connect the newer Hermes persistence reader without retaining a DB handle.
+
+    Each callback opens a short-lived read-only handle. The transcript request
+    applies the remaining budget in the repository query; lineage is excluded
+    so limiting cannot materialize earlier segments.
+    """
+    if not callable(reader_factory) or not callable(transcript_read_type):
+        raise ValueError("persistence reader factory and transcript request type are required")
+
+    def session_resolver(platform: str, chat_id: str):
+        try:
+            with reader_factory() as store:
+                entries = store.sessions.list_gateway_sessions(platform=platform, active_only=True)
+                if not isinstance(entries, (list, tuple)):
+                    raise TypeError("gateway session listing must be a sequence")
+                result = []
+                seen = set()
+                for entry in entries:
+                    session = getattr(entry, "session", None)
+                    if session is None or not all(
+                            hasattr(session, name) for name in ("session_id", "source", "chat_id")):
+                        raise TypeError("gateway session entry is missing routing fields")
+                    session_id = getattr(session, "session_id", None)
+                    source = getattr(session, "source")
+                    session_chat_id = getattr(session, "chat_id")
+                    if not isinstance(session_id, str) or not session_id or not isinstance(source, str):
+                        raise TypeError("gateway session routing fields have invalid types")
+                    if (session_id in seen
+                            or source.casefold() != str(platform or "").casefold()
+                            or str(session_chat_id or "") != str(chat_id or "")):
+                        continue
+                    seen.add(session_id)
+                    result.append(session_id)
+                    if len(result) > sources.MAX_CHAT_SESSIONS_PER_CHAT:
+                        break
+                return result
+        except Exception:
+            raise RuntimeError("Hermes retained chat history session listing failed") from None
+
+    def message_reader(session_id: str, *, limit: int):
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("chat message read limit must be a non-negative integer")
+        limit = min(limit, sources.MAX_CHAT_READS_PER_CHAT)
+        if limit == 0:
+            return
+        try:
+            with reader_factory() as store:
+                request = transcript_read_type(limit=limit, latest=True, include_lineage=False)
+                rows = store.messages.read_transcript(session_id, request)
+                bounded_rows = list(itertools.islice(iter(rows), limit))
+                normalized = []
+                for row in bounded_rows:
+                    if not all(hasattr(row, name) for name in ("role", "content", "timestamp")):
+                        raise TypeError("transcript row is missing required fields")
+                    normalized.append({
+                        "role": row.role,
+                        "content": row.content,
+                        "timestamp": row.timestamp,
+                    })
+        except Exception:
+            raise RuntimeError("Hermes retained chat history message read failed") from None
+        yield from normalized
+
+    sources.set_chat_history_interfaces(session_resolver, message_reader)
+
+
 def wire_from_runtime(ctx: Any = None) -> dict[str, bool]:
     """Wire what the pinned Hermes runtime makes available to a plugin.
 
-    Chat history: opened through the PUBLIC ``hermes_state`` module
-    (SessionDB over the default state path). Unavailable outside a real
-    Hermes runtime (stub tests, missing state) - stays unwired, collector
-    reports no_history_interface.
+    Newer Hermes runtimes use the read-only persistence reader. Older supported
+    runtimes try their public ``hermes_state.SessionDB`` surface. If the legacy
+    module is absent in the plugin runtime, or its import fails specifically
+    because ``hermes_constants.mkdir_under_hermes_home`` is missing, chat history
+    stays unwired and the source capability reports that clearly; other import
+    failures and errors from an available reader or malformed adapter are surfaced.
 
     Source discovery: the admitted-inbound hook is registered by integrate().
-    Never raises into plugin load."""
-    wired = {"chat_history": False}
+    """
     try:
-        import hermes_state  # public plugin API module in the real runtime
+        from persistence_assembly import open_persistence_reader
+    except ModuleNotFoundError as exc:
+        if exc.name != "persistence_assembly":
+            raise RuntimeError("Hermes retained chat history reader could not be imported") from None
+        # Hermes releases before the persistence reader expose SessionDB instead.
+        try:
+            import hermes_state
+        except ModuleNotFoundError as legacy_exc:
+            if legacy_exc.name == "hermes_state":
+                return {"chat_history": False}
+            raise RuntimeError("Hermes retained chat history adapter could not be imported") from None
+        except ImportError as legacy_exc:
+            if (getattr(legacy_exc, "name", None) == "hermes_constants"
+                    and "mkdir_under_hermes_home" in str(legacy_exc)):
+                _LOGGER.warning(
+                    "legacy chat-history adapter unavailable in this Hermes plugin runtime; chat history disabled")
+                return {"chat_history": False}
+            raise RuntimeError("Hermes retained chat history adapter could not be imported") from None
         db_path = getattr(hermes_state, "DEFAULT_DB_PATH", None)
         session_db_cls = getattr(hermes_state, "SessionDB", None)
-        if db_path is not None and session_db_cls is not None:
-            wire_chat_history(session_db_cls(db_path, read_only=True))
-            wired["chat_history"] = True
+        if db_path is None or not callable(session_db_cls):
+            raise RuntimeError("Hermes retained chat history adapter is incomplete") from None
+        try:
+            lazy_reader = _LazyLegacySessionDB(session_db_cls, db_path)
+            wire_chat_history(lazy_reader)
+        except Exception:
+            raise RuntimeError("Hermes retained chat history adapter could not be wired") from None
+        return {"chat_history": True}
+    except ImportError:
+        raise RuntimeError("Hermes retained chat history reader could not be imported") from None
+
+    try:
+        from hermes_constants import get_hermes_home
+        from persistence.conversation.messages import TranscriptRead
+        home = Path(get_hermes_home())
     except Exception:
-        pass  # not inside a Hermes runtime (or state unavailable): stay inert
-    return wired
+        raise RuntimeError("Hermes retained chat history reader contract is unavailable") from None
+
+    def reader_factory() -> ContextManager[Any]:
+        return cast(ContextManager[Any], open_persistence_reader(home))
+
+    wire_chat_history_from_persistence(reader_factory, TranscriptRead)
+    return {"chat_history": True}
 
 
 def observe_admitted_inbound(*, session_key: Any = "", platform: Any = "",

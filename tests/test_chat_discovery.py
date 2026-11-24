@@ -254,13 +254,19 @@ def test_snapshot_main_real_wiring_stages_and_sanitizes(discovery_env, tmp_path,
     store.disable_source('calendar')
     posts = [message('I will send the signed form next week')]
     class _StateDB:
+        def __init__(self, path, read_only=False):
+            assert read_only is True
+
         def find_session_by_origin(self, *, platform, chat_id, **kwargs):
             return 'session-synthetic' if chat_id == '42' else None
+
         def get_messages(self, session_id, limit=None, latest=False, **kwargs):
             return posts
+
     module = types.ModuleType('hermes_state')
-    module.DEFAULT_DB_PATH = str(tmp_path / 'state.db')
-    module.SessionDB = lambda path, read_only=False: _StateDB()
+    setattr(module, 'DEFAULT_DB_PATH', str(tmp_path / 'state.db'))
+    setattr(module, 'SessionDB', _StateDB)
+    monkeypatch.setitem(sys.modules, 'persistence_assembly', None)
     monkeypatch.setitem(sys.modules, 'hermes_state', module)
     assert source_snapshot.main() == 0
     out = capsys.readouterr().out
@@ -357,6 +363,9 @@ def test_helper_private_exception_text_never_leaks_to_output_or_diagnostics(
     calls = {'resolver': 0, 'reader': 0, 'staging': 0}
 
     class _SyntheticStateDB:
+        def __init__(self, path, read_only=False):
+            assert read_only is True
+
         def find_session_by_origin(self, **kwargs):
             calls['resolver'] += 1
             if failure == 'resolver':
@@ -370,8 +379,9 @@ def test_helper_private_exception_text_never_leaks_to_output_or_diagnostics(
             return [message('I will send the signed form next week')]
 
     module = types.ModuleType('hermes_state')
-    module.DEFAULT_DB_PATH = 'synthetic-state.db'
-    module.SessionDB = lambda path, read_only=False: _SyntheticStateDB()
+    setattr(module, 'DEFAULT_DB_PATH', 'synthetic-state.db')
+    setattr(module, 'SessionDB', _SyntheticStateDB)
+    monkeypatch.setitem(sys.modules, 'persistence_assembly', None)
     monkeypatch.setitem(sys.modules, 'hermes_state', module)
     original_stage = discovery.stage_local_candidates
 
