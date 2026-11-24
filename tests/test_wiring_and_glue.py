@@ -268,7 +268,7 @@ class TestRegisterGlue:
         assert called == []
 
     def test_wire_chat_history_validates_shape(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="get_messages and either list_gateway_sessions or find_session_by_origin"):
             wiring.wire_chat_history(object())
 
 

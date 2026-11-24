@@ -54,7 +54,7 @@ def wire_chat_history(state_db: Any | None) -> None:
     get_messages = getattr(state_db, "get_messages", None)
     if not callable(get_messages) or (not callable(list_sessions) and not callable(find)):
         raise ValueError(
-            "state_db must expose list_gateway_sessions and get_messages")
+            "state_db must expose get_messages and either list_gateway_sessions or find_session_by_origin")
 
     def session_resolver(platform: str, chat_id: str):
         if callable(list_sessions):
