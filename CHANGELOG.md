@@ -4,7 +4,7 @@
 
 - Newer Hermes runtimes read retained chat history through the read-only persistence reader and apply message limits in the repository query. Older supported runtimes keep the legacy `SessionDB` adapter only when the persistence-reader module is absent.
 - A malformed persistence interface or a real reader failure is surfaced as an incomplete chat review rather than silently disabling history. Gmail batch transport, source scope, and data retention are unchanged.
-- Local verification on this candidate: standalone suite **2,742 passed, 31 skipped, 243 warnings**; required Hermes-runtime suite **2,776 passed, 5 skipped, 244 warnings**; privacy gate passed. Disposable plugin validation passed, with Catalog rule 9 private-core-import warnings still present. No cloud CI or live-profile validation was run.
+- Local verification on this candidate: standalone suite **2,745 passed, 31 skipped, 243 warnings**; required Hermes-runtime suite **2,779 passed, 5 skipped, 244 warnings**; privacy gate passed. Disposable plugin validation passed, with Catalog rule 9 private-core-import warnings still present. No cloud CI or live-profile validation was run.
 
 ## 0.9.18 - connected setup and private look-back
 

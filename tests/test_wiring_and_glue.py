@@ -5,6 +5,7 @@ partial coverage."""
 
 from __future__ import annotations
 
+import builtins
 import sqlite3
 import subprocess
 import sys
@@ -164,6 +165,61 @@ def test_malformed_persistence_session_record_is_surfaced(monkeypatch, tmp_path)
     wiring.wire_from_runtime()
     with pytest.raises(RuntimeError, match="retained chat history session listing"):
         sources._chat_session_resolver("telegram", "1001")
+
+
+def test_nested_persistence_import_failure_does_not_use_legacy_adapter(monkeypatch):
+    legacy_calls = []
+    legacy = types.ModuleType("hermes_state")
+    setattr(legacy, "DEFAULT_DB_PATH", "/synthetic/state.db")
+
+    def legacy_session_db(path, read_only=False):
+        legacy_calls.append((path, read_only))
+        return _FakeStateDB()
+
+    setattr(legacy, "SessionDB", legacy_session_db)
+    original_import = builtins.__import__
+
+    def fail_nested_reader_dependency(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "persistence_assembly":
+            raise ModuleNotFoundError("No module named 'persistence_backend'", name="persistence_backend")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setitem(sys.modules, "hermes_state", legacy)
+    monkeypatch.setattr(builtins, "__import__", fail_nested_reader_dependency)
+
+    with pytest.raises(RuntimeError, match="reader could not be imported"):
+        wiring.wire_from_runtime()
+    assert legacy_calls == []
+
+
+def test_persistence_reader_clamps_oversized_limit_before_query(monkeypatch, tmp_path):
+    calls = {}
+    _install_fake_persistence_reader(monkeypatch, tmp_path, calls)
+    wiring.wire_from_runtime()
+
+    rows = list(sources._chat_message_reader(
+        "sess-1", limit=sources.MAX_CHAT_READS_PER_CHAT + 17))
+
+    assert rows == [{"role": "user", "content": "synthetic message", "timestamp": 1763300000.0}]
+    _, request = calls["transcript_query"]
+    assert request.limit == sources.MAX_CHAT_READS_PER_CHAT
+
+
+def test_persistence_transcript_read_failure_is_surfaced_without_details(monkeypatch, tmp_path):
+    calls = {}
+    store = _install_fake_persistence_reader(monkeypatch, tmp_path, calls)
+
+    def fail_read(session_id, request):
+        calls["transcript_query"] = (session_id, request)
+        raise OSError("synthetic private read failure")
+
+    monkeypatch.setattr(store.messages, "read_transcript", fail_read)
+    wiring.wire_from_runtime()
+
+    with pytest.raises(RuntimeError, match="retained chat history message read failed") as exc:
+        list(sources._chat_message_reader("sess-1", limit=2))
+    assert "synthetic private read failure" not in str(exc.value)
+    assert calls["transcript_query"][0] == "sess-1"
 
 
 
