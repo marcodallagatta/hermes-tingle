@@ -55,6 +55,22 @@ def test_fresh_setup_docs_use_one_approval_and_plain_defaults():
     assert "fresh setup instead offers the separately confirmed private 30-day Gmail look-back" in onboarding
 
 
+def test_chat_history_docs_match_multi_session_read_limits():
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    assert "Up to 5 active session routes per chat (including separate threads/topics)" in readme
+    assert "200 message reads per chat" in readme
+    assert "only the current segment of the most recent live session" not in readme
+
+
+def test_gmail_lookback_missing_bridge_fallback_is_documented():
+    root = Path(__file__).resolve().parents[1]
+    expected = ("If the email bridge is unavailable, Tingle says no review ran; ask your operator to wire it, "
+                "then run `/tingle lookback start 30`.")
+    for relative in ("README.md", "docs/onboarding.md", "docs/beta-setup.md"):
+        assert expected in (root / relative).read_text(encoding="utf-8")
+
+
 def test_existing_installation_prompt_refresh_is_documented():
     root = Path(__file__).resolve().parents[1]
     doc = (root / "docs" / "installation.md").read_text(encoding="utf-8")

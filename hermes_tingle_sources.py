@@ -883,15 +883,16 @@ _chat_session_resolver: Any = None
 _chat_message_reader: Any = None
 
 # Exact partial-coverage disclosure carried on every chat review: Hermes'
-# public session API resolves only the most recent LIVE session per chat,
-# the bounded reader covers only that session's CURRENT segment (ancestor
-# lineage expansion is an unbounded read in the pinned implementation and is
-# never used), and compaction-archived rows are excluded - so a chat review
-# never implies full history even when it completes within its bounds.
+# public session API lists live sessions by platform/chat/thread route. The
+# resolver can read up to MAX_CHAT_SESSIONS_PER_CHAT routes per chat, including
+# separate topics; the collector applies MAX_CHAT_READS_PER_CHAT across those
+# sessions and reads current segments only. Ended sessions, prior lineage and
+# compaction-archived rows are not covered, so a chat review never implies full history.
 CHAT_COVERAGE_NOTE = (
-    "current segment of the most recent live session per chat only; earlier "
-    "lineage segments, ended sessions, and compaction-archived history are "
-    "not covered (Hermes public API limits)")
+    f"up to {MAX_CHAT_SESSIONS_PER_CHAT} active session routes per chat (including separate threads/topics), "
+    "current segment only; "
+    f"up to {MAX_CHAT_READS_PER_CHAT} message reads per chat; "
+    "ended sessions, earlier lineage segments and compaction-archived history are not covered")
 
 
 def set_chat_history_interfaces(session_resolver: Any, message_reader: Any) -> None:

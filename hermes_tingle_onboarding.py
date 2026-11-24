@@ -88,6 +88,24 @@ def offer_after_setup(ctx: Any, source: Any) -> str:
     retry = ready + " Start a one-off Gmail look-back later with `/tingle lookback start 30`."
     try:
         expected = lookback.binding(source)
+    except Exception:
+        return retry
+    try:
+        email_available = "email" in sources.source_capabilities()
+    except Exception:
+        email_available = False
+    if not email_available:
+        # This is not a usable consent choice without the Google bridge. Record
+        # the fresh-setup path as unavailable to avoid a duplicate legacy prompt.
+        try:
+            store.set_plugin_meta(SETUP_LOOKBACK_OFFER_META, "unavailable")
+        except Exception:
+            pass
+        return ("Setup is complete, but the one-off Gmail review isn't available: the Google Workspace email bridge "
+                "isn't wired into this Hermes runtime, so no review was started. Ask your operator to wire it; "
+                "once available, run `/tingle lookback start 30`. "
+                "Tingle will send follow-ups automatically when needed.")
+    try:
         # Suppress the older empty-profile onboarding prompt on the next `/tingle`;
         # this offer is the fresh-setup look-back path, with manual review instead.
         store.set_plugin_meta(SETUP_LOOKBACK_OFFER_META, "offered")

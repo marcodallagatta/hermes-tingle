@@ -15,7 +15,9 @@ from test_setup_jobs import FakeCron, fake_schedule
 @pytest.fixture
 def guided(tmp_path, monkeypatch):
     import hermes_tingle_setup as setup
+    import hermes_tingle_sources as sources
     monkeypatch.setattr(setup, '_active_profiles', {})
+    monkeypatch.setattr(sources, 'source_capabilities', lambda: {'email', 'calendar', 'chat'})
     (tmp_path / 'hermes-tingle.json').unlink()
     data = tmp_path / 'plugin-data' / 'hermes-tingle'
     data.mkdir(parents=True)
@@ -189,6 +191,7 @@ def test_fresh_setup_completes_jobs_then_offers_private_30_day_review(guided, mo
         return connection
     monkeypatch.setattr(store, 'plugin_db', connect)
     checked = []
+    monkeypatch.setattr(sources, 'source_capabilities', lambda: {'email', 'calendar', 'chat'})
     monkeypatch.setattr(sources, 'probe_source', lambda kind: checked.append(kind) or ('a' * 64 if kind in ('email', 'calendar') else None))
     ctx.answers = ['start', 'later']
 
@@ -208,6 +211,45 @@ def test_fresh_setup_completes_jobs_then_offers_private_30_day_review(guided, mo
     assert 'Welcome to Tingle' not in next_list and len(ctx.questions) == 2
     assert (home / 'hermes-tingle.json').exists()
     assert (home / 'scripts' / 'hermes_tingle_due.py').exists()
+
+
+def test_fresh_setup_skips_lookback_offer_when_email_bridge_is_unavailable(guided, monkeypatch):
+    import sqlite3
+    import hermes_tingle_lookback as lookback
+    import hermes_tingle_onboarding as onboarding
+    import hermes_tingle_sources as sources
+    import hermes_tingle_store as store
+
+    home, _data, source, ctx = guided
+
+    def connect(_name):
+        connection = sqlite3.connect(home / 'fresh-setup-sources.db')
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    monkeypatch.setattr(store, 'plugin_db', connect)
+    monkeypatch.setattr(sources, 'source_capabilities', lambda: {'calendar', 'chat'})
+    original_probe = sources.probe_source
+
+    def probe(kind):
+        if kind == 'email':
+            return original_probe(kind)  # The real capability check fails closed.
+        return 'a' * 64 if kind == 'calendar' else None
+
+    monkeypatch.setattr(sources, 'probe_source', probe)
+    monkeypatch.setattr(lookback, '_run_scan', lambda *a, **k: pytest.fail('must not offer or start Gmail review'))
+    ctx.answers = ['start']
+
+    out = plugin.handle_command(ctx, '', source=source)
+
+    assert 'scheduled' in out
+    assert 'email' in out.lower() and 'left off' in out
+    assert len(ctx.questions) == 1  # Only the setup approval; no unusable Gmail offer.
+    assert len(ctx.jobs) == 2
+    assert not store.source_enabled('email')
+    assert store.get_plugin_meta(onboarding.SETUP_LOOKBACK_OFFER_META) == 'unavailable'
+    assert onboarding.due() is False
+    assert 'email bridge' in out and '`/tingle lookback start 30`' in out
 
 
 def test_invalid_fresh_setup_reply_keeps_approval_at_same_step(guided):

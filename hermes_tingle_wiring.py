@@ -6,18 +6,20 @@ At plugin load ``integrate`` registers the ``post_gateway_admission`` hook.
 The chat collector reads only after ``wire_chat_history`` connects the
 retained-session store and source consent exists. Nothing runs at import.
 
-REAL COVERAGE, labeled honestly: the public gateway-session listing resolves the
-newest LIVE session per routing key (platform/chat/thread); ended sessions are
-not enumerable through this interface. The reader covers only that session's
-CURRENT segment - ancestor lineage expansion materializes every lineage row
-before limiting in the pinned implementation, so it is never used - and
-compaction-archived rows are excluded. The collector's review carries a
-``coverage`` field saying exactly that; it never implies full history.
+REAL COVERAGE, labeled honestly: the public gateway-session listing returns
+live sessions by routing key (platform/chat/thread). The resolver returns
+active session routes for a chat, including separate topics/threads; the
+collector caps that list at five sessions and reads at most 200 messages across
+them. It covers each selected session's CURRENT segment - ancestor lineage
+expansion materializes every lineage row before limiting in the pinned
+implementation, so it is never used - and compaction-archived rows are
+excluded. The collector's review carries a ``coverage`` field stating this;
+it never implies full history.
 
 Source-side bounds: the reader asks the store for the newest
-``MAX_CHAT_READS_PER_CHAT + 1`` messages (latest+limit, single segment, so
-the bound holds in SQL) so a truncated window is detectable and disclosed,
-never silently complete.
+``MAX_CHAT_READS_PER_CHAT + 1`` messages per session (latest+limit, single
+segment, so a truncated window is detectable and disclosed, never silently
+complete; the collector enforces the 200-read per-chat cap across sessions).
 """
 
 from __future__ import annotations

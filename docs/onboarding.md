@@ -37,7 +37,7 @@ Nothing is read before approval. **Start Tingle** saves the defaults, runs minim
 
 Fresh Telegram profiles derive the owner from `platforms.telegram.home_channel`; older profiles, a non-DM home channel or a deliberate owner change still need [operator provisioning](#operator-provisioning). Existing valid profiles are not rewritten by `/tingle setup`; there it continues to preview job activation only. Source access can later be managed with `/tingle source enable <kind> [days]`, `/tingle source disable <kind>` and `/tingle sources`.
 
-After fresh setup saves both jobs, Tingle offers a one-off 30-day Gmail review. Choose model picks or scan-only; Tingle then walks possible leads in the private DM, and nothing is added without confirming each item. A timed-out lead decision can be resumed with `/tingle lookback review LB-ID`. If you skip the offer or the prompt times out, start later with `/tingle lookback start 30`. This one-off scan does not change standing source settings.
+After fresh setup saves both jobs, Tingle offers a one-off 30-day Gmail review when the email bridge is available. Choose model picks or scan-only; Tingle then walks possible leads in the private DM, and nothing is added without confirming each item. A timed-out lead decision can be resumed with `/tingle lookback review LB-ID`. If you skip the offer or the prompt times out, start later with `/tingle lookback start 30`. If the email bridge is unavailable, Tingle says no review ran; ask your operator to wire it, then run `/tingle lookback start 30`. This one-off scan does not change standing source settings.
 
 ## Optional private-chat suggestion filter
 

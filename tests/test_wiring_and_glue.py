@@ -168,7 +168,23 @@ class TestRegisterGlue:
         store.enable_source("chat", enabled_by="synthetic fixture consent")
         review = sources._collect_chat_matches(now=datetime.now(timezone.utc))
         assert review["coverage"] == wiring.CHAT_COVERAGE_NOTE
-        assert "current segment of the most recent live session" in review["coverage"]
+        assert "up to 5 active session routes per chat" in review["coverage"]
+        assert "including separate threads/topics" in review["coverage"]
+        assert "200 message reads per chat" in review["coverage"]
+        assert "ended sessions" in review["coverage"]
+        assert "not covered" in review["coverage"]
+
+    def test_collector_reads_each_active_thread_route_within_disclosed_bounds(self, isolated_store):
+        store.enable_source("chat", enabled_by="synthetic fixture consent")
+        store.note_known_chat("telegram:1001", origin="inbound")
+        store.add_item(title="Passport follow-up")
+        db = _FakeStateDB()
+        wiring.wire_chat_history(db)
+
+        review = sources._collect_chat_matches(now=datetime.now(timezone.utc))
+
+        assert [call["session_id"] for call in db.get_calls] == ["sess-1", "sess-2"]
+        assert review["coverage"] == wiring.CHAT_COVERAGE_NOTE
         assert "not covered" in review["coverage"]
 
     def test_wire_chat_history_validates_shape(self):

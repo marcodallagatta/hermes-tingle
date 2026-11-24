@@ -1,13 +1,14 @@
 # Changelog
 
-## 0.9.16 - connected setup and private look-back
+## 0.9.17 - connected setup and private look-back
 
 - Setup uses emoji-led bullets and explains that the optional private-chat suggestion filter is a separate AI pass, stays off by default, and needs separate consent.
-- When setup succeeds, it offers a one-off 30-day Gmail review. The owner chooses model picks, scan-only or later; lead review starts immediately, every tracked item retains its final confirmation, and timed-out review decisions can resume with the shown command.
+- When setup succeeds and the email bridge is available, it offers a one-off 30-day Gmail review. The owner chooses model picks, scan-only or later; lead review starts immediately, every tracked item retains its final confirmation, and timed-out review decisions can resume with the shown command. If the bridge is unavailable, no review starts; setup gives the operator repair path.
 - Look-back consent copy is shorter while keeping the coverage, private-staging, model-cost/history, no-auto-add, standing-scope and expiry-metadata facts. The completed review tells the owner Tingle will follow up automatically.
-- Chat source wiring now uses Hermes' public `list_gateway_sessions` plus `get_messages` interface; missing runtime wiring returns a precise repair instruction rather than blaming account sign-in.
-- Onboarding guidance now distinguishes the legacy empty-profile import offer on existing profiles from the separately confirmed private look-back after fresh setup.
-- Local verification: standalone **2,731 passed, 31 skipped, 243 warnings**; required Hermes runtime **2,765 passed, 5 skipped, 245 warnings** (the five runtime skips are the retired Drive-source tests). Privacy gate passed; plugin validation reports `ok: true`, `host_ready: true`, and the existing catalog rule-9 private-core-import warnings.
+- Chat source wiring uses Hermes' public `list_gateway_sessions` and `get_messages` interfaces. The disclosure now matches the reader: up to five active chat/thread routes and 200 message reads per chat, current segments only; ended, earlier-lineage and archived history are not covered.
+- Fresh setup skips the one-off review when the email bridge is missing, states that no review ran, and gives an operator repair path before the manual retry.
+- Onboarding guidance distinguishes the legacy empty-profile import offer on existing profiles from the separately confirmed private look-back after fresh setup.
+- Local verification: standalone **2,735 passed, 31 skipped, 243 warnings**; required Hermes runtime **2,769 passed, 5 skipped, 245 warnings** (the five runtime skips are the retired Drive-source tests). Privacy gate passed; plugin validation reports `ok: true`, `host_ready: true`, and the existing catalog rule-9 private-core-import warnings.
 
 ## 0.9.15 - one-approval first-run setup
 
