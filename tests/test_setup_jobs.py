@@ -64,8 +64,13 @@ def test_chat_history_docs_match_multi_session_read_limits():
     assert "only the current segment of the most recent live session" not in readme
     assert "up to five active session routes per chat" in usage
     assert "200 message reads total per chat, current segments only" in usage
-    assert "ended sessions, earlier lineage segments and compaction-archived history are not covered" in usage
+    assert "ended sessions, earlier lineage segments and compaction-archived history are not covered" in usage.lower()
     assert "Hitting a bound is disclosed as an incomplete review" in usage
+    disclosure = "active route metadata is enumerated platform-wide before filtering to this chat"
+    assert disclosure in readme.lower()
+    assert disclosure in usage.lower()
+    assert "messages from other chats aren't read" in usage
+    assert "does not change the standing email grant or start an ongoing scan" in usage
 
 
 def test_gmail_lookback_missing_bridge_fallback_is_documented():

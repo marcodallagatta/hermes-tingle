@@ -14,7 +14,10 @@ them. It covers each selected session's CURRENT segment - ancestor lineage
 expansion materializes every lineage row before limiting in the pinned
 implementation, so it is never used - and compaction-archived rows are
 excluded. The collector's review carries a ``coverage`` field stating this;
-it never implies full history.
+it never implies full history. Route discovery enumerates active routing
+metadata for the platform before filtering to the requested chat; the five-route
+and 200-message caps bound transcript reads, not this metadata enumeration.
+Messages from other chats are not fetched.
 
 Source-side bounds: each session query requests only the remaining per-chat
 budget, with ``latest=True`` and ``include_ancestors=False``. The collector

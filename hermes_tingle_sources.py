@@ -893,6 +893,8 @@ CHAT_COVERAGE_NOTE = (
     f"up to {MAX_CHAT_SESSIONS_PER_CHAT} active session routes per chat (including separate threads/topics), "
     "current segment only; "
     f"up to {MAX_CHAT_READS_PER_CHAT} message reads per chat; "
+    "active route metadata is enumerated platform-wide before filtering to this chat; "
+    "messages from other chats aren't read; "
     "ended sessions, earlier lineage segments and compaction-archived history are not covered")
 
 

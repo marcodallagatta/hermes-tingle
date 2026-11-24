@@ -170,6 +170,8 @@ class TestRegisterGlue:
         assert "up to 5 active session routes per chat" in review["coverage"]
         assert "including separate threads/topics" in review["coverage"]
         assert "200 message reads per chat" in review["coverage"]
+        assert "active route metadata is enumerated platform-wide before filtering to this chat" in review["coverage"]
+        assert "messages from other chats aren't read" in review["coverage"]
         assert "ended sessions" in review["coverage"]
         assert "not covered" in review["coverage"]
 
@@ -246,6 +248,17 @@ class TestRegisterGlue:
         called = []
 
         def eager_reader(session_id, **kwargs):
+            called.append(session_id)
+            return [{"role": "user", "content": "synthetic private text"}] * 500
+
+        with pytest.raises(ValueError, match="per-call limit"):
+            sources.set_chat_history_interfaces(lambda platform, chat_id: ["s"], eager_reader)
+        assert called == []
+
+    def test_one_argument_eager_reader_is_refused_before_invocation(self):
+        called = []
+
+        def eager_reader(session_id):
             called.append(session_id)
             return [{"role": "user", "content": "synthetic private text"}] * 500
 
