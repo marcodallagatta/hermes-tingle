@@ -4,6 +4,7 @@ from __future__ import annotations
 import itertools
 import functools
 import hashlib
+import inspect
 from contextvars import ContextVar
 import json
 import re
@@ -877,8 +878,8 @@ def _stage_reconciliation_pages(lookback_days: int, *, now: datetime) -> None:
 #
 # Injected contracts:
 #   session_resolver(platform: str, chat_id: str) -> iterable of session ids
-#   message_reader(session_id: str) -> iterable of message dicts with
-#       "role" (str), "content" (str), "timestamp" (epoch seconds, float)
+#   message_reader(session_id: str, *, limit: int) -> iterable of message dicts
+#       with "role" (str), "content" (str), and "timestamp" (epoch seconds)
 _chat_session_resolver: Any = None
 _chat_message_reader: Any = None
 
@@ -897,7 +898,10 @@ CHAT_COVERAGE_NOTE = (
 
 def set_chat_history_interfaces(session_resolver: Any, message_reader: Any) -> None:
     """Operator wiring: inject the Hermes session-history read interfaces.
-    Both must be callables; passing None for either unwires the collector."""
+    Both must be callables; passing None for either unwires the collector. The
+    bounded reader passes ``limit`` before storage access when supported and
+    clips legacy injected readers during iteration.
+    """
     global _chat_session_resolver, _chat_message_reader
     if session_resolver is None or message_reader is None:
         _chat_session_resolver = None
@@ -906,7 +910,29 @@ def set_chat_history_interfaces(session_resolver: Any, message_reader: Any) -> N
     if not callable(session_resolver) or not callable(message_reader):
         raise ValueError("chat history interfaces must be callable")
     _chat_session_resolver = session_resolver
-    _chat_message_reader = message_reader
+    try:
+        parameters = inspect.signature(message_reader).parameters.values()
+        supports_limit = (any(parameter.name == "limit" for parameter in parameters)
+                          or any(parameter.kind == inspect.Parameter.VAR_KEYWORD
+                                 for parameter in parameters))
+    except (TypeError, ValueError):
+        supports_limit = False
+
+    def bounded_message_reader(session_id: str, limit: int = MAX_CHAT_READS_PER_CHAT):
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("chat message read limit must be a non-negative integer")
+        bounded_limit = min(limit, MAX_CHAT_READS_PER_CHAT)
+        if bounded_limit == 0:
+            return
+        rows: Any
+        if supports_limit:
+            rows = message_reader(session_id, limit=bounded_limit)
+        else:
+            rows = message_reader(session_id)
+        iterable = rows if rows is not None else ()
+        yield from itertools.islice(iter(iterable), bounded_limit)
+
+    _chat_message_reader = bounded_message_reader
 
 
 @store.serialized("sources")
@@ -1058,20 +1084,21 @@ def _collect_chat_matches(*, now: datetime, discovery_enabled: bool = False) -> 
         for session_id in sessions:
             if stop_chat or total >= MAX_CHAT_MESSAGES_TOTAL:
                 break
+            remaining_reads = MAX_CHAT_READS_PER_CHAT - reads
+            if remaining_reads <= 0:
+                mark_bounded()
+                stop_chat = True
+                break
             try:
-                message_iter = safe_message_iter(iter(_chat_message_reader(session_id)))
+                message_iter = safe_message_iter(
+                    iter(_chat_message_reader(session_id, limit=remaining_reads)))
             except Exception:
                 note_incomplete("read_error")
                 stop_chat = True
                 break
-            if discovery_enabled:
-                message_iter = itertools.islice(message_iter, MAX_CHAT_READS_PER_CHAT - reads)
+            message_iter = itertools.islice(message_iter, remaining_reads)
             for message in message_iter:
                 reads += 1
-                if reads > MAX_CHAT_READS_PER_CHAT:
-                    mark_bounded()
-                    stop_chat = True
-                    break
                 if not isinstance(message, dict):
                     continue
                 if str(message.get("role", "")).casefold() not in CHAT_ALLOWED_ROLES:
@@ -1128,7 +1155,7 @@ def _collect_chat_matches(*, now: datetime, discovery_enabled: bool = False) -> 
                 total += 1
                 review["scanned"] += 1
                 update_counts[chat_ref] = collected
-            if discovery_enabled and reads >= MAX_CHAT_READS_PER_CHAT:
+            if reads >= MAX_CHAT_READS_PER_CHAT:
                 mark_bounded()
                 stop_chat = True
             if stop_chat:

@@ -24,6 +24,7 @@ complete; the collector enforces the 200-read per-chat cap across sessions).
 
 from __future__ import annotations
 
+import itertools
 from typing import Any
 
 try:
@@ -75,16 +76,25 @@ def wire_chat_history(state_db: Any | None) -> None:
         session_id = find(platform=platform, chat_id=chat_id)
         return [session_id] if isinstance(session_id, str) and session_id else []
 
-    def message_reader(session_id: str):
-        # cap+1: lets the collector DETECT a truncated window and disclose it.
+    def message_reader(session_id: str, limit: int | None = None):
+        # Apply the collector's remaining per-chat budget before the DB read;
+        # no per-session sentinel may overrun the aggregate cap.
+        if limit is None:
+            limit = sources.MAX_CHAT_READS_PER_CHAT
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("chat message read limit must be a non-negative integer")
+        limit = min(limit, sources.MAX_CHAT_READS_PER_CHAT)
+        if limit == 0:
+            return
         # include_ancestors=False is deliberate: with it True the pinned
         # store materializes EVERY lineage row via _read_all before applying
         # the limit in Python (verified against the pinned implementation) -
-        # an unbounded read. Single-session + latest + limit is bounded in
-        # SQL; earlier lineage segments are disclosed as not covered.
-        rows = get_messages(session_id, limit=sources.MAX_CHAT_READS_PER_CHAT + 1,
-                            latest=True, include_ancestors=False)
-        for row in rows or []:
+        # an unbounded read. Single-session + latest + requested limit is
+        # bounded in SQL; earlier lineage segments are disclosed as not covered.
+        rows: Any = get_messages(session_id, limit=limit,
+                                latest=True, include_ancestors=False)
+        iterable = rows if rows is not None else ()
+        for row in itertools.islice(iter(iterable), limit):
             if not isinstance(row, dict):
                 continue
             ts = row.get("timestamp", row.get("created_at"))

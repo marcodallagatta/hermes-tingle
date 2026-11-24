@@ -143,9 +143,8 @@ class TestRegisterGlue:
         sessions = resolver("telegram", "1001")
         assert sessions == ["sess-1", "sess-2"]
         rows = list(reader("sess-1"))
-        # cap+1 at the source query: a truncated window is detectable, never
-        # silently complete.
-        assert db.get_calls[0]["limit"] == sources.MAX_CHAT_READS_PER_CHAT + 1
+        # A query cannot materialize a sentinel row outside the disclosed cap.
+        assert db.get_calls[0]["limit"] == sources.MAX_CHAT_READS_PER_CHAT
         assert db.get_calls[0]["latest"] is True
         # include_ancestors stays False: the pinned store materializes every
         # lineage row before applying the limit when it is True (unbounded).
@@ -184,8 +183,64 @@ class TestRegisterGlue:
         review = sources._collect_chat_matches(now=datetime.now(timezone.utc))
 
         assert [call["session_id"] for call in db.get_calls] == ["sess-1", "sess-2"]
+        assert [call["limit"] for call in db.get_calls] == [
+            sources.MAX_CHAT_READS_PER_CHAT,
+            sources.MAX_CHAT_READS_PER_CHAT - 1,
+        ]
         assert review["coverage"] == wiring.CHAT_COVERAGE_NOTE
         assert "not covered" in review["coverage"]
+
+    def test_collector_materializes_at_most_200_rows_across_routes(self, isolated_store):
+        store.enable_source("chat", enabled_by="synthetic fixture consent")
+        store.note_known_chat("telegram:1001", origin="inbound")
+        store.add_item(title="Passport follow-up")
+        now = datetime.now(timezone.utc)
+
+        class CountingStateDB(_FakeStateDB):
+            def __init__(self):
+                super().__init__()
+                self.materialized = 0
+
+            def get_messages(self, session_id, limit=None, latest=False, **kwargs):
+                self.get_calls.append({"session_id": session_id, "limit": limit,
+                                       "latest": latest, **kwargs})
+                count = 150 if session_id == "sess-1" else int(limit or 201)
+                rows = [{"role": "user", "content": "ordinary hello",
+                         "timestamp": now.timestamp() - 60} for _ in range(count)]
+                self.materialized += len(rows)
+                return rows
+
+        db = CountingStateDB()
+        wiring.wire_chat_history(db)
+
+        review = sources._collect_chat_matches(now=now)
+
+        assert db.materialized == sources.MAX_CHAT_READS_PER_CHAT
+        assert [call["limit"] for call in db.get_calls] == [
+            sources.MAX_CHAT_READS_PER_CHAT,
+            sources.MAX_CHAT_READS_PER_CHAT - 150,
+        ]
+        assert review["review_complete"] is False
+        assert "bounded" in review["incomplete_reasons"]
+
+    def test_collector_caps_active_chat_routes_at_five(self, isolated_store):
+        store.enable_source("chat", enabled_by="synthetic fixture consent")
+        store.note_known_chat("telegram:1001", origin="inbound")
+        store.add_item(title="Passport follow-up")
+
+        class SevenRouteDB(_FakeStateDB):
+            def list_gateway_sessions(self, *, platform=None, active_only=True):
+                self.list_calls.append((platform, active_only))
+                return [{"id": f"session-{i}", "source": "telegram", "chat_id": "1001",
+                         "thread_id": f"topic-{i}"} for i in range(7)]
+
+        db = SevenRouteDB()
+        wiring.wire_chat_history(db)
+        review = sources._collect_chat_matches(now=datetime.now(timezone.utc))
+
+        assert [call["session_id"] for call in db.get_calls] == [f"session-{i}" for i in range(5)]
+        assert review["review_complete"] is False
+        assert "bounded" in review["incomplete_reasons"]
 
     def test_wire_chat_history_validates_shape(self):
         with pytest.raises(ValueError):
